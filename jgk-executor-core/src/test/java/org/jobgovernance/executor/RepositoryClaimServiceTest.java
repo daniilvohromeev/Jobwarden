@@ -169,6 +169,11 @@ class RepositoryClaimServiceTest {
         }
 
         @Override
+        public int requeueRetryableExecutions(Instant retryDueAt, int batchSize, Instant now) {
+            return 0;
+        }
+
+        @Override
         public int recoverStaleClaims(Instant leaseExpiredBefore, String recoveryWorkerId, Instant now) {
             return 0;
         }

@@ -35,6 +35,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class HandlerRunnerLoopTest {
 
+    private static final Clock TEST_CLOCK = Clock.fixed(
+            Instant.parse("2026-01-01T00:00:02Z"),
+            ZoneId.of("UTC")
+    );
+
     @Test
     void shouldMarkSucceededForSyncHandler() {
         InMemoryJobRegistry registry = new InMemoryJobRegistry();
@@ -46,7 +51,7 @@ class HandlerRunnerLoopTest {
                 repository,
                 "worker-a",
                 1,
-                Clock.systemUTC()
+                TEST_CLOCK
         );
 
         loop.executeClaimed(claimedExecution("job-a"));
@@ -67,12 +72,12 @@ class HandlerRunnerLoopTest {
                 repository,
                 "worker-a",
                 1,
-                Clock.systemUTC()
+                TEST_CLOCK
         );
 
         loop.executeClaimed(claimedExecution("job-missing"));
 
-        assertTrue(repository.markRunningCalled);
+        assertFalse(repository.markRunningCalled);
         assertFalse(repository.markSucceededCalled);
         assertTrue(repository.markFailedFinalCalled);
     }
@@ -89,7 +94,7 @@ class HandlerRunnerLoopTest {
                 repository,
                 "worker-a",
                 1,
-                Clock.systemUTC()
+                TEST_CLOCK
         );
 
         loop.executeClaimed(claimedExecution("job-a"));
@@ -236,6 +241,11 @@ class HandlerRunnerLoopTest {
         @Override
         public boolean renewLease(UUID executionId, String workerId, String leaseToken, Instant leaseExpiresAt, Instant heartbeatAt) {
             return false;
+        }
+
+        @Override
+        public int requeueRetryableExecutions(Instant retryDueAt, int batchSize, Instant now) {
+            return 0;
         }
 
         @Override

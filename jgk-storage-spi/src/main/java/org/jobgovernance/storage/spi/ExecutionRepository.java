@@ -44,6 +44,8 @@ public interface ExecutionRepository {
 
     boolean renewLease(UUID executionId, String workerId, String leaseToken, Instant leaseExpiresAt, Instant heartbeatAt);
 
+    int requeueRetryableExecutions(Instant retryDueAt, int batchSize, Instant now);
+
     int recoverStaleClaims(Instant leaseExpiredBefore, String recoveryWorkerId, Instant now);
 
     int markDeadExecutions(Instant deadline, String reason, Instant now);
