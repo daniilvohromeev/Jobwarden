@@ -33,7 +33,7 @@ public final class DefaultScheduleEvaluator implements ScheduleEvaluator {
     }
 
     @Override
-    public List<DueExecutionCandidate> evaluateDue(
+    public EvaluationResult evaluate(
             JobDefinition definition,
             ScheduleCursor cursor,
             Instant now,
@@ -45,21 +45,22 @@ public final class DefaultScheduleEvaluator implements ScheduleEvaluator {
             throw new IllegalArgumentException("maxBatch must be >= 1");
         }
         if (definition.state() != JobDefinitionState.ENABLED) {
-            return List.of();
+            return new EvaluationResult(List.of(), null);
         }
 
-        List<DueExecutionCandidate> rawDue = switch (definition.schedule()) {
+        ComputationResult computation = switch (definition.schedule()) {
             case JobSchedule.OneTimeSchedule oneTimeSchedule -> evaluateOneTime(definition, oneTimeSchedule, cursor, now);
             case JobSchedule.FixedDelaySchedule fixedDelaySchedule -> evaluateFixedDelay(definition, fixedDelaySchedule, cursor, now, maxBatch);
             case JobSchedule.FixedRateSchedule fixedRateSchedule -> evaluateFixedRate(definition, fixedRateSchedule, cursor, now, maxBatch);
             case JobSchedule.CronSchedule cronSchedule -> evaluateCron(definition, cronSchedule, cursor, now, maxBatch);
-            case JobSchedule.DisabledSchedule ignored -> List.of();
+            case JobSchedule.DisabledSchedule ignored -> new ComputationResult(List.of(), null);
         };
 
-        return applyMisfirePolicy(definition, rawDue, now, maxBatch);
+        List<DueExecutionCandidate> due = applyMisfirePolicy(definition, computation.dueCandidates(), now, maxBatch);
+        return new EvaluationResult(due, computation.nextFireAt());
     }
 
-    private List<DueExecutionCandidate> evaluateOneTime(
+    private ComputationResult evaluateOneTime(
             JobDefinition definition,
             JobSchedule.OneTimeSchedule schedule,
             ScheduleCursor cursor,
@@ -67,18 +68,18 @@ public final class DefaultScheduleEvaluator implements ScheduleEvaluator {
     ) {
         Instant scheduledAt = schedule.scheduledAt();
         if (scheduledAt.isAfter(now)) {
-            return List.of();
+            return new ComputationResult(List.of(), scheduledAt);
         }
         if (!schedule.isWithinEffectiveWindow(scheduledAt)) {
-            return List.of();
+            return new ComputationResult(List.of(), null);
         }
         if (cursor != null && cursor.lastEvaluatedAt() != null && !cursor.lastEvaluatedAt().isBefore(scheduledAt)) {
-            return List.of();
+            return new ComputationResult(List.of(), null);
         }
-        return List.of(candidate(definition.jobKey(), scheduledAt, "DELAYED"));
+        return new ComputationResult(List.of(candidate(definition.jobKey(), scheduledAt, "DELAYED")), null);
     }
 
-    private List<DueExecutionCandidate> evaluateFixedDelay(
+    private ComputationResult evaluateFixedDelay(
             JobDefinition definition,
             JobSchedule.FixedDelaySchedule schedule,
             ScheduleCursor cursor,
@@ -89,7 +90,7 @@ public final class DefaultScheduleEvaluator implements ScheduleEvaluator {
         return collectRecurringCandidates(definition.jobKey(), schedule, next, schedule.delay(), now, maxBatch);
     }
 
-    private List<DueExecutionCandidate> evaluateFixedRate(
+    private ComputationResult evaluateFixedRate(
             JobDefinition definition,
             JobSchedule.FixedRateSchedule schedule,
             ScheduleCursor cursor,
@@ -100,7 +101,7 @@ public final class DefaultScheduleEvaluator implements ScheduleEvaluator {
         return collectRecurringCandidates(definition.jobKey(), schedule, next, schedule.rate(), now, maxBatch);
     }
 
-    private List<DueExecutionCandidate> collectRecurringCandidates(
+    private ComputationResult collectRecurringCandidates(
             String jobKey,
             JobSchedule schedule,
             Instant next,
@@ -109,7 +110,7 @@ public final class DefaultScheduleEvaluator implements ScheduleEvaluator {
             int maxBatch
     ) {
         if (next == null) {
-            return List.of();
+            return new ComputationResult(List.of(), null);
         }
         List<DueExecutionCandidate> due = new ArrayList<>(Math.min(8, maxBatch));
         int remainingSafetyIterations = maxBatch * 4;
@@ -119,10 +120,10 @@ public final class DefaultScheduleEvaluator implements ScheduleEvaluator {
             }
             next = next.plus(step);
         }
-        return due;
+        return new ComputationResult(due, next);
     }
 
-    private List<DueExecutionCandidate> evaluateCron(
+    private ComputationResult evaluateCron(
             JobDefinition definition,
             JobSchedule.CronSchedule schedule,
             ScheduleCursor cursor,
@@ -132,7 +133,7 @@ public final class DefaultScheduleEvaluator implements ScheduleEvaluator {
         ExecutionTime executionTime = executionTime(schedule.cronExpression());
         Instant next = initialCronFire(schedule, cursor, now, executionTime);
         if (next == null) {
-            return List.of();
+            return new ComputationResult(List.of(), null);
         }
         List<DueExecutionCandidate> due = new ArrayList<>(Math.min(8, maxBatch));
         int remainingSafetyIterations = maxBatch * 8;
@@ -142,7 +143,7 @@ public final class DefaultScheduleEvaluator implements ScheduleEvaluator {
             }
             next = nextCronFire(next, schedule.zoneId(), executionTime);
         }
-        return due;
+        return new ComputationResult(due, next);
     }
 
     private static Instant nextRecurringFire(
@@ -243,6 +244,9 @@ public final class DefaultScheduleEvaluator implements ScheduleEvaluator {
     private static DueExecutionCandidate candidate(String jobKey, Instant scheduledAt, String triggerType) {
         String dedupeKey = jobKey + "|" + scheduledAt.toEpochMilli() + "|" + triggerType;
         return new DueExecutionCandidate(jobKey, scheduledAt, triggerType, dedupeKey);
+    }
+
+    private record ComputationResult(List<DueExecutionCandidate> dueCandidates, Instant nextFireAt) {
     }
 
     private record CronCacheKey(String expression, int fields) {

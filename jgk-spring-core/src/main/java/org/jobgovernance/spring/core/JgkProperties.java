@@ -15,6 +15,7 @@ public record JgkProperties(
         int maxRunningGlobal,
         int retryRequeueBatchSize,
         Duration leaseTtl,
+        Duration schedulerInterval,
         Duration claimPollBackoffMin,
         Duration claimPollBackoffMax,
         Duration heartbeatInterval,
@@ -31,6 +32,7 @@ public record JgkProperties(
         maxRunningGlobal = maxRunningGlobal <= 0 ? 32 : maxRunningGlobal;
         retryRequeueBatchSize = retryRequeueBatchSize <= 0 ? 128 : retryRequeueBatchSize;
         leaseTtl = leaseTtl == null ? Duration.ofSeconds(45) : leaseTtl;
+        schedulerInterval = schedulerInterval == null ? Duration.ofSeconds(5) : schedulerInterval;
         claimPollBackoffMin = claimPollBackoffMin == null ? Duration.ofMillis(200) : claimPollBackoffMin;
         claimPollBackoffMax = claimPollBackoffMax == null ? Duration.ofSeconds(5) : claimPollBackoffMax;
         heartbeatInterval = heartbeatInterval == null ? Duration.ofSeconds(30) : heartbeatInterval;

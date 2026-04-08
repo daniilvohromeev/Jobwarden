@@ -1,10 +1,15 @@
 package org.jobgovernance.core.policy;
 
 import java.time.Instant;
+import java.util.OptionalInt;
 
 public interface RetryStrategy {
 
     RetryDecision nextRetry(RetryContext context, Throwable failure);
+
+    default OptionalInt maxAttemptsHint() {
+        return OptionalInt.empty();
+    }
 
     record RetryContext(
             int attempt,

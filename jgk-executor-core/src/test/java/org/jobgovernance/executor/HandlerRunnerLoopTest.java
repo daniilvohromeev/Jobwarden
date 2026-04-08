@@ -200,6 +200,11 @@ class HandlerRunnerLoopTest {
         }
 
         @Override
+        public boolean enqueueScheduledExecution(ScheduledExecutionInsert request, Instant createdAt) {
+            return false;
+        }
+
+        @Override
         public boolean markRunning(UUID executionId, String workerId, String leaseToken, Instant startedAt) {
             markRunningCalled = true;
             return markRunningResult;

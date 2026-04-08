@@ -96,6 +96,53 @@ public class PostgresExecutionRepository implements ExecutionRepository {
     }
 
     @Override
+    public boolean enqueueScheduledExecution(ScheduledExecutionInsert request, Instant createdAt) {
+        String sql = """
+                INSERT INTO job_execution(
+                    job_key,
+                    tenant_id,
+                    trigger_type,
+                    scheduled_at,
+                    claimable_at,
+                    status,
+                    attempt,
+                    max_attempts,
+                    payload_ref,
+                    dedupe_key,
+                    correlation_id,
+                    trace_id,
+                    causation_id,
+                    parent_execution_id,
+                    idempotency_key,
+                    business_key,
+                    cancellation_requested,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, 'SCHEDULED', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE, ?, ?)
+                ON CONFLICT DO NOTHING
+                """;
+        return executeUpdate(sql, statement -> {
+            statement.setString(1, request.jobKey());
+            statement.setString(2, request.tenantId());
+            statement.setString(3, request.triggerType());
+            statement.setTimestamp(4, toTimestamp(request.scheduledAt()));
+            statement.setTimestamp(5, toTimestamp(request.claimableAt()));
+            statement.setInt(6, request.maxAttempts());
+            statement.setString(7, request.payloadRef());
+            statement.setString(8, request.dedupeKey());
+            statement.setString(9, request.correlationId());
+            statement.setString(10, request.traceId());
+            statement.setString(11, request.causationId());
+            statement.setObject(12, request.parentExecutionId());
+            statement.setString(13, request.idempotencyKey());
+            statement.setString(14, request.businessKey());
+            statement.setTimestamp(15, toTimestamp(createdAt));
+            statement.setTimestamp(16, toTimestamp(createdAt));
+        }) > 0;
+    }
+
+    @Override
     public boolean markRunning(UUID executionId, String workerId, String leaseToken, Instant startedAt) {
         String sql = """
                 UPDATE job_execution

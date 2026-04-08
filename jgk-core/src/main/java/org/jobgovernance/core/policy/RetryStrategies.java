@@ -114,6 +114,11 @@ public final class RetryStrategies {
                     config.jitterRandomSource()
             );
         }
+
+        @Override
+        public java.util.OptionalInt maxAttemptsHint() {
+            return java.util.OptionalInt.of(config.maxAttempts());
+        }
     }
 
     private record ExponentialRetryStrategy(ExponentialBackoffConfig config) implements RetryStrategy {
@@ -137,6 +142,11 @@ public final class RetryStrategies {
                     config.jitterFactor(),
                     config.jitterRandomSource()
             );
+        }
+
+        @Override
+        public java.util.OptionalInt maxAttemptsHint() {
+            return java.util.OptionalInt.of(config.maxAttempts());
         }
     }
 

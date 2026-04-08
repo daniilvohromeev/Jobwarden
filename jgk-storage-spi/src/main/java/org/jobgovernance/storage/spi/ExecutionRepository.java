@@ -13,6 +13,8 @@ public interface ExecutionRepository {
 
     Optional<JobExecution> claimExecution(UUID executionId, ClaimRequest request);
 
+    boolean enqueueScheduledExecution(ScheduledExecutionInsert request, Instant createdAt);
+
     boolean markRunning(UUID executionId, String workerId, String leaseToken, Instant startedAt);
 
     boolean markSucceeded(UUID executionId, String workerId, String leaseToken, String resultSummary, Instant finishedAt);
@@ -55,6 +57,24 @@ public interface ExecutionRepository {
             Instant claimedAt,
             Instant leaseExpiresAt,
             String leaseToken
+    ) {
+    }
+
+    record ScheduledExecutionInsert(
+            String jobKey,
+            String tenantId,
+            String triggerType,
+            Instant scheduledAt,
+            Instant claimableAt,
+            int maxAttempts,
+            String payloadRef,
+            String dedupeKey,
+            String correlationId,
+            String traceId,
+            String causationId,
+            UUID parentExecutionId,
+            String idempotencyKey,
+            String businessKey
     ) {
     }
 }

@@ -7,7 +7,17 @@ import java.util.List;
 
 public interface ScheduleEvaluator {
 
-    List<DueExecutionCandidate> evaluateDue(JobDefinition definition, ScheduleCursor cursor, Instant now, int maxBatch);
+    EvaluationResult evaluate(JobDefinition definition, ScheduleCursor cursor, Instant now, int maxBatch);
+
+    default List<DueExecutionCandidate> evaluateDue(JobDefinition definition, ScheduleCursor cursor, Instant now, int maxBatch) {
+        return evaluate(definition, cursor, now, maxBatch).dueCandidates();
+    }
+
+    record EvaluationResult(
+            List<DueExecutionCandidate> dueCandidates,
+            Instant nextFireAt
+    ) {
+    }
 
     record ScheduleCursor(String jobKey, Instant lastEvaluatedAt, Instant nextFireAt) {
     }

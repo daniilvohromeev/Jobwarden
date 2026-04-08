@@ -15,6 +15,7 @@ import org.jobgovernance.executor.PollingClaimLoop;
 import org.jobgovernance.executor.RecoveryLoop;
 import org.jobgovernance.executor.RepositoryClaimService;
 import org.jobgovernance.executor.RetryRequeueLoop;
+import org.jobgovernance.executor.SchedulerMaterializationLoop;
 import org.jobgovernance.storage.spi.ExecutionRepository;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
@@ -45,6 +46,24 @@ public class JobGovernanceAutoConfiguration {
     @ConditionalOnMissingBean
     public ScheduleEvaluator jgkScheduleEvaluator() {
         return new DefaultScheduleEvaluator();
+    }
+
+    @Bean
+    @ConditionalOnBean({JobRegistry.class, ScheduleEvaluator.class, ExecutionRepository.class})
+    @ConditionalOnMissingBean
+    public SchedulerMaterializationLoop jgkSchedulerMaterializationLoop(
+            JobRegistry jobRegistry,
+            ScheduleEvaluator scheduleEvaluator,
+            ExecutionRepository executionRepository,
+            JgkProperties properties
+    ) {
+        return new SchedulerMaterializationLoop(
+                jobRegistry,
+                scheduleEvaluator,
+                executionRepository,
+                properties.scheduleBatchSize(),
+                properties.schedulerInterval()
+        );
     }
 
     @Bean

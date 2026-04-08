@@ -114,6 +114,36 @@ class PostgresExecutionRepositoryTest {
     }
 
     @Test
+    void shouldEnqueueScheduledExecutionAndIgnoreConflicts() throws SQLException {
+        Instant now = Instant.parse("2026-01-01T00:00:00Z");
+        Instant scheduledAt = now.plusSeconds(60);
+        ExecutionRepository.ScheduledExecutionInsert request = new ExecutionRepository.ScheduledExecutionInsert(
+                "billing.reconcile",
+                null,
+                "CRON",
+                scheduledAt,
+                scheduledAt,
+                5,
+                "payload://ref",
+                "dedupe-1",
+                "corr-1",
+                "trace-1",
+                "cause-1",
+                null,
+                "idempotency-1",
+                "business-1"
+        );
+
+        boolean inserted = repository.enqueueScheduledExecution(request, now);
+        boolean duplicate = repository.enqueueScheduledExecution(request, now.plusSeconds(1));
+
+        assertTrue(inserted);
+        assertFalse(duplicate);
+        assertEquals(1, executionCount("billing.reconcile", scheduledAt));
+        assertEquals(5, maxAttempts("billing.reconcile", scheduledAt));
+    }
+
+    @Test
     void shouldTransitionRunningAndSucceededWithLeaseGuard() throws SQLException {
         Instant now = Instant.parse("2026-01-01T00:00:00Z");
         UUID executionId = UUID.randomUUID();
@@ -452,6 +482,36 @@ class PostgresExecutionRepositoryTest {
             try (ResultSet resultSet = statement.executeQuery()) {
                 resultSet.next();
                 return resultSet.getString(1);
+            }
+        }
+    }
+
+    private int executionCount(String jobKey, Instant scheduledAt) throws SQLException {
+        String sql = "SELECT COUNT(*) FROM job_execution WHERE job_key = ? AND scheduled_at = ?";
+        try (
+                Connection connection = dataSource.getConnection();
+                PreparedStatement statement = connection.prepareStatement(sql)
+        ) {
+            statement.setString(1, jobKey);
+            statement.setTimestamp(2, Timestamp.from(scheduledAt));
+            try (ResultSet resultSet = statement.executeQuery()) {
+                resultSet.next();
+                return resultSet.getInt(1);
+            }
+        }
+    }
+
+    private int maxAttempts(String jobKey, Instant scheduledAt) throws SQLException {
+        String sql = "SELECT max_attempts FROM job_execution WHERE job_key = ? AND scheduled_at = ?";
+        try (
+                Connection connection = dataSource.getConnection();
+                PreparedStatement statement = connection.prepareStatement(sql)
+        ) {
+            statement.setString(1, jobKey);
+            statement.setTimestamp(2, Timestamp.from(scheduledAt));
+            try (ResultSet resultSet = statement.executeQuery()) {
+                resultSet.next();
+                return resultSet.getInt(1);
             }
         }
     }
