@@ -1,0 +1,19 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/jgk
+    username: jgk
+    password: jgk
+
+jgk:
+  enabled: true
+  worker-id: ${HOSTNAME:local-mvc-worker}
+  schedule-batch-size: 128
+  claim-batch-size: 64
+  max-running-global: 32
+  heartbeat-interval: 30s
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
