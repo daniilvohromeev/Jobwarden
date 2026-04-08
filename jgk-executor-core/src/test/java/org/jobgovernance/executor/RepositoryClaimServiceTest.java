@@ -125,6 +125,11 @@ class RepositoryClaimServiceTest {
         }
 
         @Override
+        public boolean enqueueScheduledExecution(ScheduledExecutionInsert request, Instant createdAt) {
+            return false;
+        }
+
+        @Override
         public boolean markRunning(UUID executionId, String workerId, String leaseToken, Instant startedAt) {
             return false;
         }
@@ -166,6 +171,11 @@ class RepositoryClaimServiceTest {
         @Override
         public boolean renewLease(UUID executionId, String workerId, String leaseToken, Instant leaseExpiresAt, Instant heartbeatAt) {
             return false;
+        }
+
+        @Override
+        public int requeueRetryableExecutions(Instant retryDueAt, int batchSize, Instant now) {
+            return 0;
         }
 
         @Override

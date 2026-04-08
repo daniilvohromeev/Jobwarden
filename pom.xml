@@ -37,6 +37,7 @@
         <reactor.version>3.7.5</reactor.version>
         <vertx.version>5.0.4</vertx.version>
         <spring.boot.version>3.4.5</spring.boot.version>
+        <cronutils.version>9.2.1</cronutils.version>
         <junit.version>5.11.4</junit.version>
         <testcontainers.version>1.21.0</testcontainers.version>
     </properties>
@@ -67,6 +68,11 @@
                 <groupId>io.vertx</groupId>
                 <artifactId>vertx-core</artifactId>
                 <version>${vertx.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.cronutils</groupId>
+                <artifactId>cron-utils</artifactId>
+                <version>${cronutils.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.junit.jupiter</groupId>
