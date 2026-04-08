@@ -3,7 +3,9 @@ package org.jobgovernance.spring.core;
 import org.jobgovernance.core.api.ClaimService;
 import org.jobgovernance.core.api.InMemoryJobRegistry;
 import org.jobgovernance.core.api.JobRegistry;
+import org.jobgovernance.core.api.ScheduleEvaluator;
 import org.jobgovernance.core.model.JobExecution;
+import org.jobgovernance.core.schedule.DefaultScheduleEvaluator;
 import org.jobgovernance.executor.ActiveExecutionTracker;
 import org.jobgovernance.executor.ExecutionEngine;
 import org.jobgovernance.executor.HandlerRunnerLoop;
@@ -37,6 +39,12 @@ public class JobGovernanceAutoConfiguration {
         InMemoryJobRegistry registry = new InMemoryJobRegistry();
         registrations.forEach(registry::register);
         return registry;
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public ScheduleEvaluator jgkScheduleEvaluator() {
+        return new DefaultScheduleEvaluator();
     }
 
     @Bean
