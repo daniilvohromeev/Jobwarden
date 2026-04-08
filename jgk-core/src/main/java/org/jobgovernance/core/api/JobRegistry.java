@@ -27,6 +27,15 @@ public interface JobRegistry {
             if (payloadType == null) {
                 throw new IllegalArgumentException("payloadType is required");
             }
+            if (handlerType == null) {
+                throw new IllegalArgumentException("handlerType is required");
+            }
+            if (handlerType == HandlerType.SYNC && syncHandler == null) {
+                throw new IllegalArgumentException("syncHandler is required for SYNC handlerType");
+            }
+            if (handlerType == HandlerType.ASYNC && asyncHandler == null) {
+                throw new IllegalArgumentException("asyncHandler is required for ASYNC handlerType");
+            }
         }
     }
 
