@@ -25,6 +25,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @Testcontainers(disabledWithoutDocker = true)
@@ -183,6 +184,52 @@ class PostgresExecutionRepositoryTest {
         assertEquals("DEAD", status(retryableExecution));
     }
 
+    @Test
+    void shouldRequeueDueRetryableExecutions() throws SQLException {
+        Instant now = Instant.parse("2026-01-01T00:00:00Z");
+        UUID dueRetryExecution = UUID.randomUUID();
+        UUID futureRetryExecution = UUID.randomUUID();
+
+        insertExecution(
+                dueRetryExecution,
+                "billing.reconcile",
+                "FAILED_RETRYABLE",
+                null,
+                null,
+                null,
+                now.minusSeconds(10),
+                now.minusSeconds(10),
+                1,
+                3,
+                now.minusSeconds(1)
+        );
+        insertExecution(
+                futureRetryExecution,
+                "billing.reconcile",
+                "FAILED_RETRYABLE",
+                null,
+                null,
+                null,
+                now.minusSeconds(10),
+                now.minusSeconds(10),
+                1,
+                3,
+                now.plusSeconds(60)
+        );
+
+        int requeued = repository.requeueRetryableExecutions(now, 100, now);
+
+        assertEquals(1, requeued);
+        assertEquals("SCHEDULED", status(dueRetryExecution));
+        assertEquals(2, attempt(dueRetryExecution));
+        assertEquals(now.minusSeconds(1), claimableAt(dueRetryExecution));
+        assertNull(retryAfter(dueRetryExecution));
+
+        assertEquals("FAILED_RETRYABLE", status(futureRetryExecution));
+        assertEquals(1, attempt(futureRetryExecution));
+        assertEquals(now.plusSeconds(60), retryAfter(futureRetryExecution));
+    }
+
     private void truncateAll() throws SQLException {
         String sql = """
                 TRUNCATE TABLE
@@ -339,6 +386,50 @@ class PostgresExecutionRepositoryTest {
 
     private Instant finishedAt(UUID executionId) throws SQLException {
         String sql = "SELECT finished_at FROM job_execution WHERE execution_id = ?";
+        try (
+                Connection connection = dataSource.getConnection();
+                PreparedStatement statement = connection.prepareStatement(sql)
+        ) {
+            statement.setObject(1, executionId);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                resultSet.next();
+                Timestamp timestamp = resultSet.getTimestamp(1);
+                return timestamp == null ? null : timestamp.toInstant();
+            }
+        }
+    }
+
+    private int attempt(UUID executionId) throws SQLException {
+        String sql = "SELECT attempt FROM job_execution WHERE execution_id = ?";
+        try (
+                Connection connection = dataSource.getConnection();
+                PreparedStatement statement = connection.prepareStatement(sql)
+        ) {
+            statement.setObject(1, executionId);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                resultSet.next();
+                return resultSet.getInt(1);
+            }
+        }
+    }
+
+    private Instant claimableAt(UUID executionId) throws SQLException {
+        String sql = "SELECT claimable_at FROM job_execution WHERE execution_id = ?";
+        try (
+                Connection connection = dataSource.getConnection();
+                PreparedStatement statement = connection.prepareStatement(sql)
+        ) {
+            statement.setObject(1, executionId);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                resultSet.next();
+                Timestamp timestamp = resultSet.getTimestamp(1);
+                return timestamp == null ? null : timestamp.toInstant();
+            }
+        }
+    }
+
+    private Instant retryAfter(UUID executionId) throws SQLException {
+        String sql = "SELECT retry_after FROM job_execution WHERE execution_id = ?";
         try (
                 Connection connection = dataSource.getConnection();
                 PreparedStatement statement = connection.prepareStatement(sql)

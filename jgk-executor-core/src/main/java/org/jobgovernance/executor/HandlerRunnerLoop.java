@@ -57,6 +57,25 @@ public final class HandlerRunnerLoop implements ExecutionEngine.RunnableLoop {
         );
     }
 
+    public HandlerRunnerLoop(
+            BlockingQueue<JobExecution> claimedQueue,
+            JobRegistry jobRegistry,
+            ExecutionRepository executionRepository,
+            String workerId,
+            int maxParallelHandlers,
+            ActiveExecutionTracker activeExecutionTracker
+    ) {
+        this(
+                claimedQueue,
+                jobRegistry,
+                executionRepository,
+                workerId,
+                maxParallelHandlers,
+                activeExecutionTracker,
+                Clock.systemUTC()
+        );
+    }
+
     HandlerRunnerLoop(
             BlockingQueue<JobExecution> claimedQueue,
             JobRegistry jobRegistry,
