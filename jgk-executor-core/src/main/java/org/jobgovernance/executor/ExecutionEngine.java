@@ -33,6 +33,14 @@ public final class ExecutionEngine implements AutoCloseable {
         log.info("JGK execution engine stopped");
     }
 
+    public boolean isRunning() {
+        return started.get();
+    }
+
+    public int loopCount() {
+        return loops.size();
+    }
+
     @Override
     public void close() {
         stop();

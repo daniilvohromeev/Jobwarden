@@ -1,6 +1,7 @@
 package org.jobgovernance.spring.webflux;
 
 import org.jobgovernance.spring.core.JobGovernanceManagementService;
+import org.jobgovernance.spring.core.JobGovernanceRuntimeStatusService;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -13,6 +14,7 @@ import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.time.Instant;
 import java.util.UUID;
 
 @RestController
@@ -20,9 +22,18 @@ import java.util.UUID;
 public class JobGovernanceReactiveAdminController {
 
     private final JobGovernanceManagementService managementService;
+    private final JobGovernanceRuntimeStatusService runtimeStatusService;
 
     public JobGovernanceReactiveAdminController(JobGovernanceManagementService managementService) {
+        this(managementService, null);
+    }
+
+    public JobGovernanceReactiveAdminController(
+            JobGovernanceManagementService managementService,
+            JobGovernanceRuntimeStatusService runtimeStatusService
+    ) {
         this.managementService = managementService;
+        this.runtimeStatusService = runtimeStatusService;
     }
 
     @GetMapping("/jobs")
@@ -31,6 +42,22 @@ public class JobGovernanceReactiveAdminController {
             @RequestParam(name = "limit", defaultValue = "100") int limit
     ) {
         return Flux.fromIterable(managementService.listJobs(tenantId, limit));
+    }
+
+    @GetMapping("/health")
+    public Mono<JobGovernanceRuntimeStatusService.RuntimeStatus> health() {
+        if (runtimeStatusService == null) {
+            return Mono.just(new JobGovernanceRuntimeStatusService.RuntimeStatus("UNKNOWN", "unknown-worker", false, 0, 0, 0, Instant.now()));
+        }
+        return Mono.fromSupplier(runtimeStatusService::health);
+    }
+
+    @GetMapping("/readiness")
+    public Mono<JobGovernanceRuntimeStatusService.RuntimeStatus> readiness() {
+        if (runtimeStatusService == null) {
+            return Mono.just(new JobGovernanceRuntimeStatusService.RuntimeStatus("UNKNOWN", "unknown-worker", false, 0, 0, 0, Instant.now()));
+        }
+        return Mono.fromSupplier(runtimeStatusService::readiness);
     }
 
     @PostMapping("/jobs/{jobKey}/trigger")

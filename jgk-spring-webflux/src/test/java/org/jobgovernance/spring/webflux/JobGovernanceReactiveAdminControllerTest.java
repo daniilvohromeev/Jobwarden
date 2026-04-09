@@ -1,6 +1,7 @@
 package org.jobgovernance.spring.webflux;
 
 import org.jobgovernance.spring.core.JobGovernanceManagementService;
+import org.jobgovernance.spring.core.JobGovernanceRuntimeStatusService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
@@ -19,11 +20,15 @@ class JobGovernanceReactiveAdminControllerTest {
 
     private WebTestClient webTestClient;
     private JobGovernanceManagementService managementService;
-    
+    private JobGovernanceRuntimeStatusService runtimeStatusService;
+
     @BeforeEach
     void setUp() {
         managementService = mock(JobGovernanceManagementService.class);
-        webTestClient = WebTestClient.bindToController(new JobGovernanceReactiveAdminController(managementService)).build();
+        runtimeStatusService = mock(JobGovernanceRuntimeStatusService.class);
+        webTestClient = WebTestClient.bindToController(
+                new JobGovernanceReactiveAdminController(managementService, runtimeStatusService)
+        ).build();
     }
 
     @Test
@@ -106,5 +111,29 @@ class JobGovernanceReactiveAdminControllerTest {
                 .expectStatus().isNoContent();
 
         verify(managementService).cancelExecution(executionId, "ops-user", "manual stop");
+    }
+
+    @Test
+    void readinessShouldExposeRuntimeStatus() {
+        when(runtimeStatusService.readiness()).thenReturn(new JobGovernanceRuntimeStatusService.RuntimeStatus(
+                "READY",
+                "worker-a",
+                true,
+                6,
+                1,
+                12,
+                Instant.parse("2026-01-01T00:00:00Z")
+        ));
+
+        webTestClient.get()
+                .uri("/jgk/v1/readiness")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.state").isEqualTo("READY")
+                .jsonPath("$.workerId").isEqualTo("worker-a")
+                .jsonPath("$.engineRunning").isEqualTo(true);
+
+        verify(runtimeStatusService).readiness();
     }
 }

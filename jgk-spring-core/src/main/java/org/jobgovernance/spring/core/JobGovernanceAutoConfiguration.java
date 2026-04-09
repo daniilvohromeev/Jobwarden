@@ -261,6 +261,24 @@ public class JobGovernanceAutoConfiguration {
         return new ExecutionEngineLifecycle(executionEngine);
     }
 
+    @Bean
+    @ConditionalOnBean({ExecutionEngine.class, ActiveExecutionTracker.class, JobRegistry.class})
+    @ConditionalOnMissingBean
+    public JobGovernanceRuntimeStatusService jgkRuntimeStatusService(
+            ExecutionEngine executionEngine,
+            ActiveExecutionTracker activeExecutionTracker,
+            JobRegistry jobRegistry,
+            JgkProperties properties
+    ) {
+        return new DefaultJobGovernanceRuntimeStatusService(
+                executionEngine,
+                activeExecutionTracker,
+                jobRegistry,
+                properties.workerId(),
+                java.time.Clock.systemUTC()
+        );
+    }
+
     private static void enqueueClaimedExecution(BlockingQueue<JobExecution> queue, JobExecution execution) {
         try {
             queue.put(execution);

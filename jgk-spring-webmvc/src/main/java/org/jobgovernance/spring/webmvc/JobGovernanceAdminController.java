@@ -1,6 +1,7 @@
 package org.jobgovernance.spring.webmvc;
 
 import org.jobgovernance.spring.core.JobGovernanceManagementService;
+import org.jobgovernance.spring.core.JobGovernanceRuntimeStatusService;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -20,9 +21,18 @@ import java.util.UUID;
 public class JobGovernanceAdminController {
 
     private final JobGovernanceManagementService managementService;
+    private final JobGovernanceRuntimeStatusService runtimeStatusService;
 
     public JobGovernanceAdminController(JobGovernanceManagementService managementService) {
+        this(managementService, null);
+    }
+
+    public JobGovernanceAdminController(
+            JobGovernanceManagementService managementService,
+            JobGovernanceRuntimeStatusService runtimeStatusService
+    ) {
         this.managementService = managementService;
+        this.runtimeStatusService = runtimeStatusService;
     }
 
     @GetMapping("/jobs")
@@ -31,6 +41,20 @@ public class JobGovernanceAdminController {
             @RequestParam(name = "limit", defaultValue = "100") int limit
     ) {
         return managementService.listJobs(tenantId, limit);
+    }
+
+    @GetMapping("/health")
+    public JobGovernanceRuntimeStatusService.RuntimeStatus health() {
+        return runtimeStatusService == null
+                ? new JobGovernanceRuntimeStatusService.RuntimeStatus("UNKNOWN", "unknown-worker", false, 0, 0, 0, Instant.now())
+                : runtimeStatusService.health();
+    }
+
+    @GetMapping("/readiness")
+    public JobGovernanceRuntimeStatusService.RuntimeStatus readiness() {
+        return runtimeStatusService == null
+                ? new JobGovernanceRuntimeStatusService.RuntimeStatus("UNKNOWN", "unknown-worker", false, 0, 0, 0, Instant.now())
+                : runtimeStatusService.readiness();
     }
 
     @GetMapping("/jobs/{jobKey}/executions")

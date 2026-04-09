@@ -2,6 +2,7 @@ package org.jobgovernance.spring.webmvc;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.jobgovernance.spring.core.JobGovernanceManagementService;
+import org.jobgovernance.spring.core.JobGovernanceRuntimeStatusService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
@@ -26,13 +27,15 @@ class JobGovernanceAdminControllerTest {
     private MockMvc mockMvc;
 
     private JobGovernanceManagementService managementService;
+    private JobGovernanceRuntimeStatusService runtimeStatusService;
     private ObjectMapper objectMapper;
 
     @BeforeEach
     void setUp() {
         managementService = mock(JobGovernanceManagementService.class);
+        runtimeStatusService = mock(JobGovernanceRuntimeStatusService.class);
         objectMapper = new ObjectMapper();
-        mockMvc = MockMvcBuilders.standaloneSetup(new JobGovernanceAdminController(managementService)).build();
+        mockMvc = MockMvcBuilders.standaloneSetup(new JobGovernanceAdminController(managementService, runtimeStatusService)).build();
     }
 
     @Test
@@ -107,5 +110,26 @@ class JobGovernanceAdminControllerTest {
                 .andExpect(status().isNoContent());
 
         verify(managementService).cancelExecution(executionId, "ops-user", "manual stop");
+    }
+
+    @Test
+    void healthShouldExposeRuntimeStatus() throws Exception {
+        when(runtimeStatusService.health()).thenReturn(new JobGovernanceRuntimeStatusService.RuntimeStatus(
+                "UP",
+                "worker-a",
+                true,
+                6,
+                2,
+                14,
+                Instant.parse("2026-01-01T00:00:00Z")
+        ));
+
+        mockMvc.perform(get("/jgk/v1/health"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.state").value("UP"))
+                .andExpect(jsonPath("$.workerId").value("worker-a"))
+                .andExpect(jsonPath("$.engineRunning").value(true));
+
+        verify(runtimeStatusService).health();
     }
 }
