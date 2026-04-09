@@ -32,6 +32,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class PostgresExecutionRepositoryTest {
 
+    private static final String POLICY_ALLOW_OVERLAP = """
+            {"concurrency":{"kind":"ALLOW_OVERLAP"}}
+            """;
+    private static final String POLICY_FORBID_OVERLAP = """
+            {"concurrency":{"kind":"FORBID_OVERLAP"}}
+            """;
+    private static final String POLICY_ALLOW_OVERLAP_UP_TO_2 = """
+            {"concurrency":{"kind":"ALLOW_OVERLAP_UP_TO","limit":2}}
+            """;
+
     @Container
     static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16")
             .withDatabaseName("jgk")
@@ -113,6 +123,64 @@ class PostgresExecutionRepositoryTest {
         assertEquals(1L, fencingToken(executionId));
         assertEquals("CLAIMED", latestAttemptStatus(executionId));
         assertEquals(now, latestAttemptClaimedAt(executionId));
+    }
+
+    @Test
+    void shouldEnforceForbidOverlapPolicyDuringClaim() throws SQLException {
+        Instant now = Instant.parse("2026-01-01T00:00:00Z");
+        String jobKey = "billing.no-overlap";
+        insertDefinition(jobKey, POLICY_FORBID_OVERLAP);
+        UUID firstExecution = UUID.randomUUID();
+        UUID secondExecution = UUID.randomUUID();
+        insertExecution(firstExecution, jobKey, "SCHEDULED", null, null, null, now.minusSeconds(5), now.minusSeconds(5), 1, 3, null);
+        insertExecution(secondExecution, jobKey, "SCHEDULED", null, null, null, now.minusSeconds(4), now.minusSeconds(4), 1, 3, null);
+
+        var firstClaim = repository.claimExecution(
+                firstExecution,
+                new ExecutionRepository.ClaimRequest("worker-1", now, now.plusSeconds(45), "lease-1")
+        );
+        var secondClaim = repository.claimExecution(
+                secondExecution,
+                new ExecutionRepository.ClaimRequest("worker-2", now.plusSeconds(1), now.plusSeconds(46), "lease-2")
+        );
+
+        assertTrue(firstClaim.isPresent());
+        assertFalse(secondClaim.isPresent());
+        assertEquals("CLAIMED", status(firstExecution));
+        assertEquals("SCHEDULED", status(secondExecution));
+    }
+
+    @Test
+    void shouldEnforceAllowOverlapUpToPolicyDuringClaim() throws SQLException {
+        Instant now = Instant.parse("2026-01-01T00:00:00Z");
+        String jobKey = "billing.overlap-up-to";
+        insertDefinition(jobKey, POLICY_ALLOW_OVERLAP_UP_TO_2);
+        UUID firstExecution = UUID.randomUUID();
+        UUID secondExecution = UUID.randomUUID();
+        UUID thirdExecution = UUID.randomUUID();
+        insertExecution(firstExecution, jobKey, "SCHEDULED", null, null, null, now.minusSeconds(5), now.minusSeconds(5), 1, 3, null);
+        insertExecution(secondExecution, jobKey, "SCHEDULED", null, null, null, now.minusSeconds(4), now.minusSeconds(4), 1, 3, null);
+        insertExecution(thirdExecution, jobKey, "SCHEDULED", null, null, null, now.minusSeconds(3), now.minusSeconds(3), 1, 3, null);
+
+        var firstClaim = repository.claimExecution(
+                firstExecution,
+                new ExecutionRepository.ClaimRequest("worker-1", now, now.plusSeconds(45), "lease-1")
+        );
+        var secondClaim = repository.claimExecution(
+                secondExecution,
+                new ExecutionRepository.ClaimRequest("worker-2", now.plusSeconds(1), now.plusSeconds(46), "lease-2")
+        );
+        var thirdClaim = repository.claimExecution(
+                thirdExecution,
+                new ExecutionRepository.ClaimRequest("worker-3", now.plusSeconds(2), now.plusSeconds(47), "lease-3")
+        );
+
+        assertTrue(firstClaim.isPresent());
+        assertTrue(secondClaim.isPresent());
+        assertFalse(thirdClaim.isPresent());
+        assertEquals("CLAIMED", status(firstExecution));
+        assertEquals("CLAIMED", status(secondExecution));
+        assertEquals("SCHEDULED", status(thirdExecution));
     }
 
     @Test
@@ -345,6 +413,10 @@ class PostgresExecutionRepositoryTest {
     }
 
     private void insertDefinition(String jobKey) throws SQLException {
+        insertDefinition(jobKey, POLICY_ALLOW_OVERLAP);
+    }
+
+    private void insertDefinition(String jobKey, String policyJson) throws SQLException {
         String sql = """
                 INSERT INTO job_definition(
                     job_key,
@@ -360,7 +432,7 @@ class PostgresExecutionRepositoryTest {
                     updated_at,
                     updated_by
                 )
-                VALUES (?, 1, ?, 'integration test definition', 'team-a', 'BLOCKING', 'v1', 'ENABLED', '{}'::jsonb, ?, ?, 'it')
+                VALUES (?, 1, ?, 'integration test definition', 'team-a', 'BLOCKING', 'v1', 'ENABLED', ?::jsonb, ?, ?, 'it')
                 ON CONFLICT (job_key) DO NOTHING
                 """;
         Instant now = Instant.parse("2026-01-01T00:00:00Z");
@@ -370,8 +442,9 @@ class PostgresExecutionRepositoryTest {
         ) {
             statement.setString(1, jobKey);
             statement.setString(2, jobKey);
-            statement.setTimestamp(3, Timestamp.from(now));
+            statement.setString(3, policyJson == null || policyJson.isBlank() ? POLICY_ALLOW_OVERLAP : policyJson);
             statement.setTimestamp(4, Timestamp.from(now));
+            statement.setTimestamp(5, Timestamp.from(now));
             statement.executeUpdate();
         }
     }

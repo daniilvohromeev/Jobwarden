@@ -51,7 +51,7 @@ public interface StorageContractSupport {
                                 Duration.ofMinutes(1)
                         ),
                         MisfirePolicy.CATCH_UP_LATEST_ONLY,
-                        new ConcurrencyPolicy.ForbidOverlap(),
+                        new ConcurrencyPolicy.AllowOverlap(),
                         new NoopIdempotencyStrategy(),
                         true
                 ),

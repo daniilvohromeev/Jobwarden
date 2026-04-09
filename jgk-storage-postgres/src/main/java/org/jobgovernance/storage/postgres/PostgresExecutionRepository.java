@@ -67,10 +67,61 @@ public class PostgresExecutionRepository implements ExecutionRepository {
                     fencing_token = fencing_token + 1,
                     updated_at = ?,
                     version = version + 1
+                FROM LATERAL (
+                    SELECT
+                        COALESCE(NULLIF(d.policy_json #>> '{concurrency,kind}', ''), 'FORBID_OVERLAP') AS concurrency_kind,
+                        COALESCE(NULLIF(d.policy_json #>> '{concurrency,limit}', '')::INT, 1) AS concurrency_limit
+                    FROM job_definition d
+                    WHERE d.job_key = job_execution.job_key
+                ) policy
                 WHERE execution_id = ?
                   AND status = 'SCHEDULED'
                   AND cancellation_requested = FALSE
                   AND claimable_at <= ?
+                  AND (
+                      policy.concurrency_kind = 'ALLOW_OVERLAP'
+                      OR policy.concurrency_kind = 'SHARD_BY_PARTITION_KEY'
+                      OR (
+                          policy.concurrency_kind IN ('FORBID_OVERLAP', 'SINGLETON_CLUSTER_WIDE')
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM job_execution active
+                              WHERE active.job_key = job_execution.job_key
+                                AND active.execution_id <> job_execution.execution_id
+                                AND active.status IN ('CLAIMED', 'RUNNING', 'CANCEL_REQUESTED')
+                                AND active.lease_expires_at IS NOT NULL
+                                AND active.lease_expires_at > ?
+                          )
+                      )
+                      OR (
+                          policy.concurrency_kind = 'SINGLETON_PER_TENANT'
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM job_execution active
+                              WHERE active.job_key = job_execution.job_key
+                                AND active.execution_id <> job_execution.execution_id
+                                AND active.status IN ('CLAIMED', 'RUNNING', 'CANCEL_REQUESTED')
+                                AND active.lease_expires_at IS NOT NULL
+                                AND active.lease_expires_at > ?
+                                AND (
+                                    (active.tenant_id IS NULL AND job_execution.tenant_id IS NULL)
+                                    OR active.tenant_id = job_execution.tenant_id
+                                )
+                          )
+                      )
+                      OR (
+                          policy.concurrency_kind = 'ALLOW_OVERLAP_UP_TO'
+                          AND (
+                              SELECT COUNT(*)
+                              FROM job_execution active
+                              WHERE active.job_key = job_execution.job_key
+                                AND active.execution_id <> job_execution.execution_id
+                                AND active.status IN ('CLAIMED', 'RUNNING', 'CANCEL_REQUESTED')
+                                AND active.lease_expires_at IS NOT NULL
+                                AND active.lease_expires_at > ?
+                          ) < GREATEST(1, policy.concurrency_limit)
+                      )
+                  )
                 RETURNING *
                 """;
         try (Connection connection = dataSource.getConnection()) {
@@ -84,6 +135,9 @@ public class PostgresExecutionRepository implements ExecutionRepository {
                 statement.setTimestamp(5, toTimestamp(request.claimedAt()));
                 statement.setObject(6, executionId);
                 statement.setTimestamp(7, toTimestamp(request.claimedAt()));
+                statement.setTimestamp(8, toTimestamp(request.claimedAt()));
+                statement.setTimestamp(9, toTimestamp(request.claimedAt()));
+                statement.setTimestamp(10, toTimestamp(request.claimedAt()));
                 try (ResultSet resultSet = statement.executeQuery()) {
                     if (!resultSet.next()) {
                         connection.rollback();
