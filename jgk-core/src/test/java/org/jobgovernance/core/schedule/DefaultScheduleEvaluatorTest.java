@@ -72,6 +72,27 @@ class DefaultScheduleEvaluatorTest {
         assertEquals(now.minusSeconds(120), due.get(1).scheduledAt());
         assertEquals(now.minusSeconds(60), due.get(2).scheduledAt());
         assertEquals(now, due.get(3).scheduledAt());
+        assertEquals("FIXED_RATE", due.getFirst().triggerType());
+    }
+
+    @Test
+    void shouldUseFixedDelayTriggerTypeForFixedDelaySchedules() {
+        Instant now = Instant.parse("2026-01-01T00:03:00Z");
+        JobDefinition definition = definition(
+                "job-fixed-delay",
+                new JobSchedule.FixedDelaySchedule(Duration.ofMinutes(1), Duration.ZERO, ZoneId.of("UTC"), now.minusSeconds(180), null),
+                MisfirePolicy.CATCH_UP_ALL_MISSED_WINDOWS
+        );
+        ScheduleEvaluator.ScheduleCursor cursor = new ScheduleEvaluator.ScheduleCursor(
+                definition.jobKey(),
+                now.minusSeconds(180),
+                now.minusSeconds(180)
+        );
+
+        List<ScheduleEvaluator.DueExecutionCandidate> due = evaluator.evaluateDue(definition, cursor, now, 10);
+
+        assertEquals(4, due.size());
+        assertEquals("FIXED_DELAY", due.getFirst().triggerType());
     }
 
     @Test

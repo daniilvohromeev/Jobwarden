@@ -87,7 +87,15 @@ public final class DefaultScheduleEvaluator implements ScheduleEvaluator {
             int maxBatch
     ) {
         Instant next = nextRecurringFire(schedule.initialDelay(), schedule.effectiveFrom(), cursor, now);
-        return collectRecurringCandidates(definition.jobKey(), schedule, next, schedule.delay(), now, maxBatch);
+        return collectRecurringCandidates(
+                definition.jobKey(),
+                schedule,
+                next,
+                schedule.delay(),
+                now,
+                maxBatch,
+                "FIXED_DELAY"
+        );
     }
 
     private ComputationResult evaluateFixedRate(
@@ -98,7 +106,15 @@ public final class DefaultScheduleEvaluator implements ScheduleEvaluator {
             int maxBatch
     ) {
         Instant next = nextRecurringFire(schedule.initialDelay(), schedule.effectiveFrom(), cursor, now);
-        return collectRecurringCandidates(definition.jobKey(), schedule, next, schedule.rate(), now, maxBatch);
+        return collectRecurringCandidates(
+                definition.jobKey(),
+                schedule,
+                next,
+                schedule.rate(),
+                now,
+                maxBatch,
+                "FIXED_RATE"
+        );
     }
 
     private ComputationResult collectRecurringCandidates(
@@ -107,7 +123,8 @@ public final class DefaultScheduleEvaluator implements ScheduleEvaluator {
             Instant next,
             java.time.Duration step,
             Instant now,
-            int maxBatch
+            int maxBatch,
+            String triggerType
     ) {
         if (next == null) {
             return new ComputationResult(List.of(), null);
@@ -116,7 +133,7 @@ public final class DefaultScheduleEvaluator implements ScheduleEvaluator {
         int remainingSafetyIterations = maxBatch * 4;
         while (next != null && !next.isAfter(now) && due.size() < maxBatch && remainingSafetyIterations-- > 0) {
             if (schedule.isWithinEffectiveWindow(next)) {
-                due.add(candidate(jobKey, next, "CRON"));
+                due.add(candidate(jobKey, next, triggerType));
             }
             next = next.plus(step);
         }
