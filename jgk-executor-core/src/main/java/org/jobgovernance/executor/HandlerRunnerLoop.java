@@ -4,6 +4,7 @@ import org.jobgovernance.core.api.CancellationToken;
 import org.jobgovernance.core.api.ExecutionContext;
 import org.jobgovernance.core.api.JobRegistry;
 import org.jobgovernance.core.model.JobExecution;
+import org.jobgovernance.core.policy.IdempotencyStrategy;
 import org.jobgovernance.core.policy.RetryStrategy;
 import org.jobgovernance.core.policy.TimeoutPolicy;
 import org.jobgovernance.storage.spi.ExecutionRepository;
@@ -15,6 +16,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletionException;
@@ -245,15 +248,68 @@ public final class HandlerRunnerLoop implements ExecutionEngine.RunnableLoop {
                 null,
                 Map.of()
         );
+        CancellationToken cancellationToken = executionCancellationToken(claimed.executionId());
+        IdempotencyStrategy idempotencyStrategy = registration.definition().policy().idempotencyStrategy();
+        Optional<String> deduplicationKey = idempotencyStrategy.deduplicationKey(context).filter(key -> !key.isBlank());
 
         try {
+            if (cancellationToken.isCancellationRequested()) {
+                Instant cancelledAt = clock.instant();
+                executionRepository.markCancelled(
+                        claimed.executionId(),
+                        workerId,
+                        claimed.leaseToken(),
+                        "Cancellation requested",
+                        cancelledAt
+                );
+                notifyIdempotencyAfter(idempotencyStrategy, context, deduplicationKey, false, null, "Cancellation requested");
+                return;
+            }
+
+            if (deduplicationKey.isPresent()) {
+                IdempotencyStrategy.BeforeExecutionDecision beforeDecision =
+                        idempotencyStrategy.beforeExecution(context, deduplicationKey.get());
+                if (beforeDecision == IdempotencyStrategy.BeforeExecutionDecision.SKIP_ALREADY_PROCESSED) {
+                    Instant skippedAt = clock.instant();
+                    executionRepository.markSkipped(
+                            claimed.executionId(),
+                            workerId,
+                            claimed.leaseToken(),
+                            "Skipped: idempotency key already processed",
+                            skippedAt
+                    );
+                    notifyIdempotencyAfter(
+                            idempotencyStrategy,
+                            context,
+                            deduplicationKey,
+                            true,
+                            "Skipped: idempotency key already processed",
+                            null
+                    );
+                    return;
+                }
+                if (beforeDecision == IdempotencyStrategy.BeforeExecutionDecision.REUSE_PREVIOUS_RESULT) {
+                    Instant finishedAt = clock.instant();
+                    String reusedSummary = "Reused previous idempotent result";
+                    executionRepository.markSucceeded(
+                            claimed.executionId(),
+                            workerId,
+                            claimed.leaseToken(),
+                            reusedSummary,
+                            finishedAt
+                    );
+                    notifyIdempotencyAfter(idempotencyStrategy, context, deduplicationKey, true, reusedSummary, null);
+                    return;
+                }
+            }
+
             JobRegistry.JobRegistration<Object, Object> typed = (JobRegistry.JobRegistration<Object, Object>) registration;
             Object result;
             if (typed.handlerType() == JobRegistry.HandlerType.SYNC) {
-                result = typed.syncHandler().handle(context, CancellationToken.none());
+                result = typed.syncHandler().handle(context, cancellationToken);
             } else {
                 result = typed.asyncHandler()
-                        .handleAsync(context, CancellationToken.none())
+                        .handleAsync(context, cancellationToken)
                         .toCompletableFuture()
                         .orTimeout(executionTimeout.toMillis(), TimeUnit.MILLISECONDS)
                         .join();
@@ -268,16 +324,31 @@ public final class HandlerRunnerLoop implements ExecutionEngine.RunnableLoop {
                         "Execution timeout exceeded",
                         finishedAt
                 );
+                notifyIdempotencyAfter(idempotencyStrategy, context, deduplicationKey, false, null, "Execution timeout exceeded");
                 return;
             }
 
+            if (cancellationToken.isCancellationRequested()) {
+                executionRepository.markCancelled(
+                        claimed.executionId(),
+                        workerId,
+                        claimed.leaseToken(),
+                        "Cancellation requested",
+                        finishedAt
+                );
+                notifyIdempotencyAfter(idempotencyStrategy, context, deduplicationKey, false, null, "Cancellation requested");
+                return;
+            }
+
+            String resultSummary = summarizeResult(result);
             executionRepository.markSucceeded(
                     claimed.executionId(),
                     workerId,
                     claimed.leaseToken(),
-                    summarizeResult(result),
+                    resultSummary,
                     finishedAt
             );
+            notifyIdempotencyAfter(idempotencyStrategy, context, deduplicationKey, true, resultSummary, null);
         } catch (Throwable throwable) {
             Throwable failure = unwrap(throwable);
             Instant failedAt = clock.instant();
@@ -289,16 +360,19 @@ public final class HandlerRunnerLoop implements ExecutionEngine.RunnableLoop {
                         "Cancellation requested",
                         failedAt
                 );
+                notifyIdempotencyAfter(idempotencyStrategy, context, deduplicationKey, false, null, "Cancellation requested");
                 return;
             }
             if (failure instanceof TimeoutException) {
+                String timeoutSummary = summarizeError(failure);
                 executionRepository.markTimedOut(
                         claimed.executionId(),
                         workerId,
                         claimed.leaseToken(),
-                        summarizeError(failure),
+                        timeoutSummary,
                         failedAt
                 );
+                notifyIdempotencyAfter(idempotencyStrategy, context, deduplicationKey, false, null, timeoutSummary);
                 return;
             }
 
@@ -315,13 +389,14 @@ public final class HandlerRunnerLoop implements ExecutionEngine.RunnableLoop {
                     failure
             );
 
+            String retryErrorSummary = summarizeRetryError(failure, retryDecision);
             if (retryDecision.retryable() && retryDecision.nextAttemptAt() != null) {
                 executionRepository.markFailedRetryable(
                         claimed.executionId(),
                         workerId,
                         claimed.leaseToken(),
                         failure.getClass().getName(),
-                        summarizeRetryError(failure, retryDecision),
+                        retryErrorSummary,
                         retryDecision.nextAttemptAt(),
                         failedAt
                 );
@@ -331,10 +406,11 @@ public final class HandlerRunnerLoop implements ExecutionEngine.RunnableLoop {
                         workerId,
                         claimed.leaseToken(),
                         failure.getClass().getName(),
-                        summarizeRetryError(failure, retryDecision),
+                        retryErrorSummary,
                         failedAt
                 );
             }
+            notifyIdempotencyAfter(idempotencyStrategy, context, deduplicationKey, false, null, retryErrorSummary);
         } finally {
             activeExecutionTracker.remove(claimed.executionId());
         }
@@ -395,5 +471,38 @@ public final class HandlerRunnerLoop implements ExecutionEngine.RunnableLoop {
             return value;
         }
         return value.substring(0, maxLength);
+    }
+
+    private CancellationToken executionCancellationToken(UUID executionId) {
+        return () -> executionRepository.findExecution(executionId)
+                .map(JobExecution::cancellationRequested)
+                .orElse(false);
+    }
+
+    private void notifyIdempotencyAfter(
+            IdempotencyStrategy strategy,
+            ExecutionContext<Object> context,
+            Optional<String> deduplicationKey,
+            boolean success,
+            String resultSummary,
+            String errorSummary
+    ) {
+        if (deduplicationKey.isEmpty()) {
+            return;
+        }
+        try {
+            strategy.afterExecution(
+                    context,
+                    deduplicationKey.get(),
+                    new IdempotencyStrategy.AfterExecutionResult(success, resultSummary, errorSummary)
+            );
+        } catch (RuntimeException exception) {
+            log.warn(
+                    "Idempotency post-execution hook failed for executionId={} jobKey={}",
+                    context.executionId(),
+                    context.jobKey(),
+                    exception
+            );
+        }
     }
 }

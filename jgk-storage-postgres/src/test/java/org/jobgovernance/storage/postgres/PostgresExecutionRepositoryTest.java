@@ -228,6 +228,36 @@ class PostgresExecutionRepositoryTest {
     }
 
     @Test
+    void shouldMarkExecutionAsSkipped() throws SQLException {
+        Instant now = Instant.parse("2026-01-01T00:00:00Z");
+        UUID executionId = UUID.randomUUID();
+        insertExecution(
+                executionId,
+                "billing.reconcile",
+                "RUNNING",
+                "worker-1",
+                "lease-1",
+                now.plusSeconds(30),
+                now.minusSeconds(10),
+                now.minusSeconds(10),
+                1,
+                3,
+                null
+        );
+
+        boolean skipped = repository.markSkipped(
+                executionId,
+                "worker-1",
+                "lease-1",
+                "Skipped: idempotency key already processed",
+                now.plusSeconds(1)
+        );
+
+        assertTrue(skipped);
+        assertEquals("SKIPPED", status(executionId));
+    }
+
+    @Test
     void shouldRecoverStaleClaimsAndMarkDeadByPolicies() throws SQLException {
         Instant now = Instant.parse("2026-01-01T00:00:00Z");
         UUID retryableExecution = UUID.randomUUID();

@@ -22,6 +22,8 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -58,6 +60,7 @@ class HandlerRunnerLoopTest {
 
         assertTrue(repository.markRunningCalled);
         assertTrue(repository.markSucceededCalled);
+        assertFalse(repository.markCancelledCalled);
         assertFalse(repository.markFailedFinalCalled);
         assertEquals("sync-ok", repository.lastResultSummary);
     }
@@ -104,10 +107,78 @@ class HandlerRunnerLoopTest {
         assertFalse(repository.markFailedFinalCalled);
     }
 
+    @Test
+    void shouldMarkCancelledWhenCancellationAlreadyRequested() {
+        InMemoryJobRegistry registry = new InMemoryJobRegistry();
+        registry.register(syncRegistration("job-a"));
+        FakeExecutionRepository repository = new FakeExecutionRepository();
+        JobExecution claimed = claimedExecution("job-a");
+        repository.markCancellationRequested(claimed.executionId(), claimed.jobKey(), claimed.scheduledAt());
+        HandlerRunnerLoop loop = new HandlerRunnerLoop(
+                new LinkedBlockingQueue<>(),
+                registry,
+                repository,
+                "worker-a",
+                1,
+                TEST_CLOCK
+        );
+
+        loop.executeClaimed(claimed);
+
+        assertTrue(repository.markRunningCalled);
+        assertFalse(repository.markSucceededCalled);
+        assertTrue(repository.markCancelledCalled);
+        assertFalse(repository.markFailedFinalCalled);
+    }
+
+    @Test
+    void shouldMarkSkippedWhenIdempotencyStrategyRequestsSkip() {
+        InMemoryJobRegistry registry = new InMemoryJobRegistry();
+        registry.register(syncRegistration("job-a", new IdempotencyStrategy() {
+            @Override
+            public Optional<String> deduplicationKey(org.jobgovernance.core.api.ExecutionContext<?> context) {
+                return Optional.of("job-a|dedupe");
+            }
+
+            @Override
+            public BeforeExecutionDecision beforeExecution(org.jobgovernance.core.api.ExecutionContext<?> context, String deduplicationKey) {
+                return BeforeExecutionDecision.SKIP_ALREADY_PROCESSED;
+            }
+
+            @Override
+            public void afterExecution(org.jobgovernance.core.api.ExecutionContext<?> context, String deduplicationKey, AfterExecutionResult result) {
+            }
+        }));
+        FakeExecutionRepository repository = new FakeExecutionRepository();
+        HandlerRunnerLoop loop = new HandlerRunnerLoop(
+                new LinkedBlockingQueue<>(),
+                registry,
+                repository,
+                "worker-a",
+                1,
+                TEST_CLOCK
+        );
+
+        loop.executeClaimed(claimedExecution("job-a"));
+
+        assertTrue(repository.markRunningCalled);
+        assertFalse(repository.markSucceededCalled);
+        assertFalse(repository.markCancelledCalled);
+        assertTrue(repository.markSkippedCalled);
+    }
+
     @SuppressWarnings("unchecked")
     private JobRegistry.JobRegistration<Map<String, Object>, String> syncRegistration(String jobKey) {
+        return syncRegistration(jobKey, noopIdempotencyStrategy());
+    }
+
+    @SuppressWarnings("unchecked")
+    private JobRegistry.JobRegistration<Map<String, Object>, String> syncRegistration(
+            String jobKey,
+            IdempotencyStrategy idempotencyStrategy
+    ) {
         return new JobRegistry.JobRegistration<>(
-                definition(jobKey),
+                definition(jobKey, idempotencyStrategy),
                 (Class<Map<String, Object>>) (Class<?>) Map.class,
                 JobRegistry.HandlerType.SYNC,
                 (context, cancellationToken) -> "sync-ok",
@@ -115,7 +186,7 @@ class HandlerRunnerLoopTest {
         );
     }
 
-    private JobDefinition definition(String jobKey) {
+    private JobDefinition definition(String jobKey, IdempotencyStrategy idempotencyStrategy) {
         return new JobDefinition(
                 jobKey,
                 1,
@@ -130,21 +201,7 @@ class HandlerRunnerLoopTest {
                         new TimeoutPolicy.DefaultTimeoutPolicy(Duration.ofMinutes(1), Duration.ofMinutes(1), Duration.ofMinutes(1), Duration.ofSeconds(10), Duration.ofSeconds(30)),
                         MisfirePolicy.IGNORE,
                         new ConcurrencyPolicy.ForbidOverlap(),
-                        new IdempotencyStrategy() {
-                            @Override
-                            public Optional<String> deduplicationKey(org.jobgovernance.core.api.ExecutionContext<?> context) {
-                                return Optional.empty();
-                            }
-
-                            @Override
-                            public BeforeExecutionDecision beforeExecution(org.jobgovernance.core.api.ExecutionContext<?> context, String deduplicationKey) {
-                                return BeforeExecutionDecision.EXECUTE;
-                            }
-
-                            @Override
-                            public void afterExecution(org.jobgovernance.core.api.ExecutionContext<?> context, String deduplicationKey, AfterExecutionResult result) {
-                            }
-                        },
+                        idempotencyStrategy,
                         false
                 ),
                 "schema-v1",
@@ -153,6 +210,24 @@ class HandlerRunnerLoopTest {
                 false,
                 null
         );
+    }
+
+    private static IdempotencyStrategy noopIdempotencyStrategy() {
+        return new IdempotencyStrategy() {
+            @Override
+            public Optional<String> deduplicationKey(org.jobgovernance.core.api.ExecutionContext<?> context) {
+                return Optional.empty();
+            }
+
+            @Override
+            public BeforeExecutionDecision beforeExecution(org.jobgovernance.core.api.ExecutionContext<?> context, String deduplicationKey) {
+                return BeforeExecutionDecision.EXECUTE;
+            }
+
+            @Override
+            public void afterExecution(org.jobgovernance.core.api.ExecutionContext<?> context, String deduplicationKey, AfterExecutionResult result) {
+            }
+        };
     }
 
     private JobExecution claimedExecution(String jobKey) {
@@ -185,9 +260,13 @@ class HandlerRunnerLoopTest {
 
         boolean markRunningCalled;
         boolean markSucceededCalled;
+        boolean markCancelledCalled;
+        boolean markSkippedCalled;
         boolean markFailedFinalCalled;
         boolean markRunningResult = true;
         String lastResultSummary;
+        private final Map<UUID, JobExecution> executionsById = new HashMap<>();
+        private final Set<UUID> cancellationRequestedExecutionIds = new HashSet<>();
 
         @Override
         public List<UUID> findDueExecutionIds(Instant now, int batchSize) {
@@ -206,6 +285,57 @@ class HandlerRunnerLoopTest {
 
         @Override
         public Optional<JobExecution> findExecution(UUID executionId) {
+            if (cancellationRequestedExecutionIds.contains(executionId)) {
+                JobExecution base = executionsById.get(executionId);
+                if (base != null) {
+                    return Optional.of(new JobExecution(
+                            base.executionId(),
+                            base.jobKey(),
+                            base.triggerType(),
+                            base.scheduledAt(),
+                            base.claimedAt(),
+                            base.startedAt(),
+                            base.finishedAt(),
+                            ExecutionStatus.CANCEL_REQUESTED,
+                            base.workerId(),
+                            base.attempt(),
+                            base.payloadRef(),
+                            base.resultSummary(),
+                            base.errorSummary(),
+                            true,
+                            base.fencingToken(),
+                            base.leaseToken(),
+                            base.correlationId(),
+                            base.traceId(),
+                            base.causationId(),
+                            base.parentExecutionId(),
+                            base.tenantId()
+                    ));
+                }
+                return Optional.of(new JobExecution(
+                        executionId,
+                        "job-a",
+                        TriggerType.CRON,
+                        Instant.parse("2026-01-01T00:00:00Z"),
+                        Instant.parse("2026-01-01T00:00:01Z"),
+                        Instant.parse("2026-01-01T00:00:02Z"),
+                        null,
+                        ExecutionStatus.CANCEL_REQUESTED,
+                        "worker-a",
+                        1,
+                        null,
+                        null,
+                        null,
+                        true,
+                        1L,
+                        "lease-a",
+                        null,
+                        null,
+                        null,
+                        null,
+                        null
+                ));
+            }
             return Optional.empty();
         }
 
@@ -249,13 +379,20 @@ class HandlerRunnerLoopTest {
         }
 
         @Override
+        public boolean markSkipped(UUID executionId, String workerId, String leaseToken, String reason, Instant finishedAt) {
+            markSkippedCalled = true;
+            return true;
+        }
+
+        @Override
         public boolean requestCancellation(UUID executionId, String actor, String reason, Instant requestedAt) {
             return false;
         }
 
         @Override
         public boolean markCancelled(UUID executionId, String workerId, String leaseToken, String reason, Instant finishedAt) {
-            return false;
+            markCancelledCalled = true;
+            return true;
         }
 
         @Override
@@ -276,6 +413,33 @@ class HandlerRunnerLoopTest {
         @Override
         public int markDeadExecutions(Instant deadline, String reason, Instant now) {
             return 0;
+        }
+
+        void markCancellationRequested(UUID executionId, String jobKey, Instant scheduledAt) {
+            cancellationRequestedExecutionIds.add(executionId);
+            executionsById.put(executionId, new JobExecution(
+                    executionId,
+                    jobKey,
+                    TriggerType.CRON,
+                    scheduledAt,
+                    scheduledAt.plusSeconds(1),
+                    scheduledAt.plusSeconds(2),
+                    null,
+                    ExecutionStatus.RUNNING,
+                    "worker-a",
+                    1,
+                    null,
+                    null,
+                    null,
+                    false,
+                    1L,
+                    "lease-a",
+                    null,
+                    null,
+                    null,
+                    null,
+                    null
+            ));
         }
     }
 }

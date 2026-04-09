@@ -436,6 +436,35 @@ public class PostgresExecutionRepository implements ExecutionRepository {
     }
 
     @Override
+    public boolean markSkipped(UUID executionId, String workerId, String leaseToken, String reason, Instant finishedAt) {
+        String sql = """
+                UPDATE job_execution
+                SET status = 'SKIPPED',
+                    finished_at = ?,
+                    result_summary = ?,
+                    updated_at = ?,
+                    version = version + 1
+                WHERE execution_id = ?
+                  AND status IN ('CLAIMED', 'RUNNING', 'CANCEL_REQUESTED')
+                  AND worker_id = ?
+                  AND lease_token = ?
+                """;
+        int updated = executeUpdate(sql, statement -> {
+            statement.setTimestamp(1, toTimestamp(finishedAt));
+            statement.setString(2, reason);
+            statement.setTimestamp(3, toTimestamp(finishedAt));
+            statement.setObject(4, executionId);
+            statement.setString(5, workerId);
+            statement.setString(6, leaseToken);
+        });
+        if (updated > 0) {
+            updateCurrentAttempt(executionId, null, finishedAt, "SKIPPED", null, reason);
+            return true;
+        }
+        return false;
+    }
+
+    @Override
     public boolean requestCancellation(UUID executionId, String actor, String reason, Instant requestedAt) {
         String sql = """
                 UPDATE job_execution

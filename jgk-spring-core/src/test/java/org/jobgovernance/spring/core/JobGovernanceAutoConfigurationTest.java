@@ -120,6 +120,11 @@ class JobGovernanceAutoConfigurationTest {
         }
 
         @Override
+        public boolean markSkipped(UUID executionId, String workerId, String leaseToken, String reason, Instant finishedAt) {
+            return false;
+        }
+
+        @Override
         public boolean requestCancellation(UUID executionId, String actor, String reason, Instant requestedAt) {
             return false;
         }

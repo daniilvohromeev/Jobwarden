@@ -50,6 +50,8 @@ public interface ExecutionRepository {
 
     boolean markTimedOut(UUID executionId, String workerId, String leaseToken, String reason, Instant finishedAt);
 
+    boolean markSkipped(UUID executionId, String workerId, String leaseToken, String reason, Instant finishedAt);
+
     boolean requestCancellation(UUID executionId, String actor, String reason, Instant requestedAt);
 
     boolean markCancelled(UUID executionId, String workerId, String leaseToken, String reason, Instant finishedAt);
