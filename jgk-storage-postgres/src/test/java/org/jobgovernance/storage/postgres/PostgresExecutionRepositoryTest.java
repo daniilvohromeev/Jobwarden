@@ -187,6 +187,28 @@ class PostgresExecutionRepositoryTest {
     }
 
     @Test
+    void shouldAggregateActiveWorkers() throws SQLException {
+        Instant now = Instant.parse("2026-01-01T00:00:00Z");
+        UUID executionA1 = UUID.randomUUID();
+        UUID executionA2 = UUID.randomUUID();
+        UUID executionB1 = UUID.randomUUID();
+
+        insertExecution(executionA1, "billing.reconcile", "RUNNING", "worker-A", "lease-A1", now.plusSeconds(45), now.minusSeconds(15), now.minusSeconds(15), 1, 3, null);
+        insertExecution(executionA2, "billing.reconcile", "CLAIMED", "worker-A", "lease-A2", now.plusSeconds(50), now.minusSeconds(10), now.minusSeconds(10), 1, 3, null);
+        insertExecution(executionB1, "billing.reconcile", "RUNNING", "worker-B", "lease-B1", now.plusSeconds(30), now.minusSeconds(5), now.minusSeconds(5), 1, 3, null);
+
+        List<ExecutionRepository.WorkerStatus> workers = repository.findActiveWorkers(now, 10);
+
+        assertEquals(2, workers.size());
+        assertEquals("worker-A", workers.getFirst().workerId());
+        assertEquals(2, workers.getFirst().activeExecutions());
+        assertNotNull(workers.getFirst().oldestClaimedAt());
+        assertNotNull(workers.getFirst().leaseExpiresAt());
+        assertEquals("worker-B", workers.get(1).workerId());
+        assertEquals(1, workers.get(1).activeExecutions());
+    }
+
+    @Test
     void shouldHandleCancellationStates() throws SQLException {
         Instant now = Instant.parse("2026-01-01T00:00:00Z");
         UUID scheduledExecution = UUID.randomUUID();

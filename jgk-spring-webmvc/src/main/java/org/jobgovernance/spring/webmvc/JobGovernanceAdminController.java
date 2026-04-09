@@ -108,6 +108,13 @@ public class JobGovernanceAdminController {
         return managementService.listAuditEventsByExecution(executionId, limit);
     }
 
+    @GetMapping("/workers/active")
+    public List<JobGovernanceManagementService.WorkerView> listActiveWorkers(
+            @RequestParam(name = "limit", defaultValue = "100") int limit
+    ) {
+        return managementService.listActiveWorkers(limit);
+    }
+
     @PostMapping("/jobs/{jobKey}/trigger")
     @ResponseStatus(HttpStatus.ACCEPTED)
     public JobGovernanceManagementService.ExecutionView triggerNow(

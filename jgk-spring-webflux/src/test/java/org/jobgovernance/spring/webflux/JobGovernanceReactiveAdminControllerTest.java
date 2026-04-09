@@ -221,4 +221,29 @@ class JobGovernanceReactiveAdminControllerTest {
 
         verify(managementService).listAuditEventsByExecution(executionId, 5);
     }
+
+    @Test
+    void listActiveWorkersShouldReturnPayload() {
+        when(managementService.listActiveWorkers(5)).thenReturn(List.of(
+                new JobGovernanceManagementService.WorkerView(
+                        "worker-a",
+                        2,
+                        Instant.parse("2026-01-01T00:00:00Z"),
+                        Instant.parse("2026-01-01T00:00:10Z"),
+                        Instant.parse("2026-01-01T00:00:40Z")
+                )
+        ));
+
+        webTestClient.get()
+                .uri(uriBuilder -> uriBuilder.path("/jgk/v1/workers/active")
+                        .queryParam("limit", 5)
+                        .build())
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$[0].workerId").isEqualTo("worker-a")
+                .jsonPath("$[0].activeExecutions").isEqualTo(2);
+
+        verify(managementService).listActiveWorkers(5);
+    }
 }

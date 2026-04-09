@@ -313,6 +313,32 @@ class DefaultJobGovernanceManagementServiceTest {
         assertEquals("EXECUTION_CANCEL_REQUESTED", byExecution.get(1).eventType());
     }
 
+    @Test
+    void shouldListActiveWorkersFromExecutionRepository() {
+        Instant now = Instant.parse("2026-01-01T00:00:00Z");
+        InMemoryJobRegistry registry = new InMemoryJobRegistry();
+        registry.register(registration("billing.reconcile", null));
+        FakeExecutionRepository executionRepository = new FakeExecutionRepository();
+        executionRepository.activeWorkers.add(new ExecutionRepository.WorkerStatus(
+                "worker-a",
+                3,
+                now.minusSeconds(40),
+                now.minusSeconds(5),
+                now.plusSeconds(20)
+        ));
+        DefaultJobGovernanceManagementService service = new DefaultJobGovernanceManagementService(
+                registry,
+                executionRepository,
+                Clock.fixed(now, ZoneOffset.UTC)
+        );
+
+        List<JobGovernanceManagementService.WorkerView> workers = service.listActiveWorkers(10);
+
+        assertEquals(1, workers.size());
+        assertEquals("worker-a", workers.getFirst().workerId());
+        assertEquals(3, workers.getFirst().activeExecutions());
+    }
+
     @SuppressWarnings("unchecked")
     private static JobRegistry.JobRegistration<Map<String, Object>, String> registration(String jobKey, String tenantScope) {
         JobDefinition definition = new JobDefinition(
@@ -371,6 +397,7 @@ class DefaultJobGovernanceManagementServiceTest {
         private final Map<UUID, JobExecution> executions = new HashMap<>();
         private final Map<String, UUID> idemIndex = new HashMap<>();
         private final Set<UUID> cancellable = new java.util.HashSet<>();
+        private final List<ExecutionRepository.WorkerStatus> activeWorkers = new ArrayList<>();
         private UUID lastCancelExecutionId;
         private String lastCancelActor;
         private String lastCancelReason;
@@ -441,6 +468,13 @@ class DefaultJobGovernanceManagementServiceTest {
         public Optional<JobExecution> findByIdempotencyKey(String jobKey, String tenantId, String idempotencyKey) {
             UUID executionId = idemIndex.get(idemComposite(jobKey, tenantId, idempotencyKey));
             return executionId == null ? Optional.empty() : Optional.ofNullable(executions.get(executionId));
+        }
+
+        @Override
+        public List<WorkerStatus> findActiveWorkers(Instant now, int limit) {
+            return activeWorkers.stream()
+                    .limit(limit)
+                    .toList();
         }
 
         @Override

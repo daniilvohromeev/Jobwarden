@@ -156,6 +156,20 @@ public final class DefaultJobGovernanceManagementService implements JobGovernanc
                 .toList();
     }
 
+    @Override
+    public List<WorkerView> listActiveWorkers(int limit) {
+        int cappedLimit = capLimit(limit);
+        return executionRepository.findActiveWorkers(clock.instant(), cappedLimit).stream()
+                .map(worker -> new WorkerView(
+                        worker.workerId(),
+                        worker.activeExecutions(),
+                        worker.oldestClaimedAt(),
+                        worker.lastHeartbeatAt(),
+                        worker.leaseExpiresAt()
+                ))
+                .toList();
+    }
+
     private ExecutionView trigger(
             String jobKey,
             String tenantId,

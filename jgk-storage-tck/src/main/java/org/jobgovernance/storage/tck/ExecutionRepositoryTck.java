@@ -173,4 +173,38 @@ public interface ExecutionRepositoryTck extends StorageContractSupport {
         assertEquals(2, execution.attempt());
         assertNotNull(execution.scheduledAt());
     }
+
+    @Test
+    default void shouldReportActiveWorkers() {
+        clearStorage();
+        seedDefinition("tck.execution.workers");
+        Instant now = fixedNow();
+
+        UUID a1 = seedScheduledExecution("tck.execution.workers", now.minusSeconds(2));
+        UUID a2 = seedScheduledExecution("tck.execution.workers", now.minusSeconds(1));
+        UUID b1 = seedScheduledExecution("tck.execution.workers", now);
+
+        assertTrue(executionRepository().claimExecution(
+                a1,
+                new ExecutionRepository.ClaimRequest("worker-a", now, now.plusSeconds(60), "lease-a1")
+        ).isPresent());
+        assertTrue(executionRepository().claimExecution(
+                a2,
+                new ExecutionRepository.ClaimRequest("worker-a", now.plusSeconds(1), now.plusSeconds(60), "lease-a2")
+        ).isPresent());
+        assertTrue(executionRepository().markRunning(a2, "worker-a", "lease-a2", now.plusSeconds(2)));
+        assertTrue(executionRepository().claimExecution(
+                b1,
+                new ExecutionRepository.ClaimRequest("worker-b", now.plusSeconds(3), now.plusSeconds(60), "lease-b1")
+        ).isPresent());
+
+        List<ExecutionRepository.WorkerStatus> workers = executionRepository().findActiveWorkers(now.plusSeconds(4), 10);
+
+        assertEquals(2, workers.size());
+        assertEquals("worker-a", workers.getFirst().workerId());
+        assertEquals(2, workers.getFirst().activeExecutions());
+        assertNotNull(workers.getFirst().leaseExpiresAt());
+        assertEquals("worker-b", workers.get(1).workerId());
+        assertEquals(1, workers.get(1).activeExecutions());
+    }
 }

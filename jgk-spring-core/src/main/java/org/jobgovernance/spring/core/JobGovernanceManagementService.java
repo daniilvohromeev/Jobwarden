@@ -28,6 +28,10 @@ public interface JobGovernanceManagementService {
 
     List<AuditView> listAuditEventsByExecution(UUID executionId, int limit);
 
+    default List<WorkerView> listActiveWorkers(int limit) {
+        return List.of();
+    }
+
     default Optional<JobView> getJob(String jobKey, String tenantId) {
         if (jobKey == null || jobKey.isBlank()) {
             return Optional.empty();
@@ -99,6 +103,15 @@ public interface JobGovernanceManagementService {
             String actor,
             String detailsJson,
             Instant createdAt
+    ) {
+    }
+
+    record WorkerView(
+            String workerId,
+            int activeExecutions,
+            Instant oldestClaimedAt,
+            Instant lastHeartbeatAt,
+            Instant leaseExpiresAt
     ) {
     }
 }

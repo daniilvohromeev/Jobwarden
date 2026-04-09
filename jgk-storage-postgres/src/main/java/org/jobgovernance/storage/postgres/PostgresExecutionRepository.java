@@ -236,6 +236,48 @@ public class PostgresExecutionRepository implements ExecutionRepository {
     }
 
     @Override
+    public List<WorkerStatus> findActiveWorkers(Instant now, int limit) {
+        String sql = """
+                SELECT
+                    worker_id,
+                    COUNT(*) AS active_executions,
+                    MIN(claimed_at) AS oldest_claimed_at,
+                    MAX(last_heartbeat_at) AS last_heartbeat_at,
+                    MAX(lease_expires_at) AS lease_expires_at
+                FROM job_execution
+                WHERE status IN ('CLAIMED', 'RUNNING', 'CANCEL_REQUESTED')
+                  AND worker_id IS NOT NULL
+                  AND lease_expires_at IS NOT NULL
+                  AND lease_expires_at > ?
+                GROUP BY worker_id
+                ORDER BY active_executions DESC, worker_id
+                LIMIT ?
+                """;
+        try (
+                Connection connection = dataSource.getConnection();
+                PreparedStatement statement = connection.prepareStatement(sql)
+        ) {
+            statement.setTimestamp(1, toTimestamp(now));
+            statement.setInt(2, limit);
+            List<WorkerStatus> workers = new ArrayList<>(Math.min(limit, 64));
+            try (ResultSet resultSet = statement.executeQuery()) {
+                while (resultSet.next()) {
+                    workers.add(new WorkerStatus(
+                            resultSet.getString("worker_id"),
+                            resultSet.getInt("active_executions"),
+                            toInstant(resultSet, "oldest_claimed_at"),
+                            toInstant(resultSet, "last_heartbeat_at"),
+                            toInstant(resultSet, "lease_expires_at")
+                    ));
+                }
+            }
+            return workers;
+        } catch (SQLException exception) {
+            throw repositoryException("find active workers", exception);
+        }
+    }
+
+    @Override
     public boolean markRunning(UUID executionId, String workerId, String leaseToken, Instant startedAt) {
         String sql = """
                 UPDATE job_execution

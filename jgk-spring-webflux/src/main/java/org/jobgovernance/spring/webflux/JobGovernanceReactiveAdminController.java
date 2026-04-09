@@ -128,6 +128,13 @@ public class JobGovernanceReactiveAdminController {
         return Flux.fromIterable(managementService.listAuditEventsByExecution(executionId, limit));
     }
 
+    @GetMapping("/workers/active")
+    public Flux<JobGovernanceManagementService.WorkerView> listActiveWorkers(
+            @RequestParam(name = "limit", defaultValue = "100") int limit
+    ) {
+        return Flux.fromIterable(managementService.listActiveWorkers(limit));
+    }
+
     public record TriggerRequest(String tenantId, String actor, String payloadJson, String idempotencyKey) {
     }
 

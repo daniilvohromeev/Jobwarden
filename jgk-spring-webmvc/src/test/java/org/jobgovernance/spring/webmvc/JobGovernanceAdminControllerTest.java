@@ -205,4 +205,25 @@ class JobGovernanceAdminControllerTest {
 
         verify(managementService).listAuditEventsByJob("billing.reconcile", 5);
     }
+
+    @Test
+    void listActiveWorkersShouldReturnPayload() throws Exception {
+        when(managementService.listActiveWorkers(5)).thenReturn(List.of(
+                new JobGovernanceManagementService.WorkerView(
+                        "worker-a",
+                        3,
+                        Instant.parse("2026-01-01T00:00:00Z"),
+                        Instant.parse("2026-01-01T00:00:10Z"),
+                        Instant.parse("2026-01-01T00:00:30Z")
+                )
+        ));
+
+        mockMvc.perform(get("/jgk/v1/workers/active")
+                        .param("limit", "5"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].workerId").value("worker-a"))
+                .andExpect(jsonPath("$[0].activeExecutions").value(3));
+
+        verify(managementService).listActiveWorkers(5);
+    }
 }

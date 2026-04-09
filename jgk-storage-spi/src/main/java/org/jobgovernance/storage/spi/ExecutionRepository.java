@@ -21,6 +21,10 @@ public interface ExecutionRepository {
 
     Optional<JobExecution> findByIdempotencyKey(String jobKey, String tenantId, String idempotencyKey);
 
+    default List<WorkerStatus> findActiveWorkers(Instant now, int limit) {
+        return List.of();
+    }
+
     boolean markRunning(UUID executionId, String workerId, String leaseToken, Instant startedAt);
 
     boolean markSucceeded(UUID executionId, String workerId, String leaseToken, String resultSummary, Instant finishedAt);
@@ -81,6 +85,15 @@ public interface ExecutionRepository {
             UUID parentExecutionId,
             String idempotencyKey,
             String businessKey
+    ) {
+    }
+
+    record WorkerStatus(
+            String workerId,
+            int activeExecutions,
+            Instant oldestClaimedAt,
+            Instant lastHeartbeatAt,
+            Instant leaseExpiresAt
     ) {
     }
 }
