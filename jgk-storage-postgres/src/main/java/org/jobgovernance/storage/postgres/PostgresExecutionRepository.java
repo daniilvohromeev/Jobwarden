@@ -73,22 +73,32 @@ public class PostgresExecutionRepository implements ExecutionRepository {
                   AND claimable_at <= ?
                 RETURNING *
                 """;
-        try (
-                Connection connection = dataSource.getConnection();
-                PreparedStatement statement = connection.prepareStatement(sql)
-        ) {
-            statement.setTimestamp(1, toTimestamp(request.claimedAt()));
-            statement.setString(2, request.workerId());
-            statement.setString(3, request.leaseToken());
-            statement.setTimestamp(4, toTimestamp(request.leaseExpiresAt()));
-            statement.setTimestamp(5, toTimestamp(request.claimedAt()));
-            statement.setObject(6, executionId);
-            statement.setTimestamp(7, toTimestamp(request.claimedAt()));
-            try (ResultSet resultSet = statement.executeQuery()) {
-                if (!resultSet.next()) {
-                    return Optional.empty();
+        try (Connection connection = dataSource.getConnection()) {
+            boolean previousAutoCommit = connection.getAutoCommit();
+            connection.setAutoCommit(false);
+            try (PreparedStatement statement = connection.prepareStatement(sql)) {
+                statement.setTimestamp(1, toTimestamp(request.claimedAt()));
+                statement.setString(2, request.workerId());
+                statement.setString(3, request.leaseToken());
+                statement.setTimestamp(4, toTimestamp(request.leaseExpiresAt()));
+                statement.setTimestamp(5, toTimestamp(request.claimedAt()));
+                statement.setObject(6, executionId);
+                statement.setTimestamp(7, toTimestamp(request.claimedAt()));
+                try (ResultSet resultSet = statement.executeQuery()) {
+                    if (!resultSet.next()) {
+                        connection.rollback();
+                        return Optional.empty();
+                    }
+                    JobExecution execution = mapExecution(resultSet);
+                    upsertExecutionAttemptClaim(connection, execution, request.claimedAt());
+                    connection.commit();
+                    return Optional.of(execution);
                 }
-                return Optional.of(mapExecution(resultSet));
+            } catch (SQLException exception) {
+                connection.rollback();
+                throw exception;
+            } finally {
+                connection.setAutoCommit(previousAutoCommit);
             }
         } catch (SQLException exception) {
             throw repositoryException("claim execution", exception);
@@ -238,13 +248,18 @@ public class PostgresExecutionRepository implements ExecutionRepository {
                   AND worker_id = ?
                   AND lease_token = ?
                 """;
-        return executeUpdate(sql, statement -> {
+        int updated = executeUpdate(sql, statement -> {
             statement.setTimestamp(1, toTimestamp(startedAt));
             statement.setTimestamp(2, toTimestamp(startedAt));
             statement.setObject(3, executionId);
             statement.setString(4, workerId);
             statement.setString(5, leaseToken);
-        }) > 0;
+        });
+        if (updated > 0) {
+            updateCurrentAttempt(executionId, startedAt, null, "RUNNING", null, null);
+            return true;
+        }
+        return false;
     }
 
     @Override
@@ -261,14 +276,19 @@ public class PostgresExecutionRepository implements ExecutionRepository {
                   AND worker_id = ?
                   AND lease_token = ?
                 """;
-        return executeUpdate(sql, statement -> {
+        int updated = executeUpdate(sql, statement -> {
             statement.setTimestamp(1, toTimestamp(finishedAt));
             statement.setString(2, resultSummary);
             statement.setTimestamp(3, toTimestamp(finishedAt));
             statement.setObject(4, executionId);
             statement.setString(5, workerId);
             statement.setString(6, leaseToken);
-        }) > 0;
+        });
+        if (updated > 0) {
+            updateCurrentAttempt(executionId, null, finishedAt, "SUCCEEDED", null, null);
+            return true;
+        }
+        return false;
     }
 
     @Override
@@ -295,7 +315,7 @@ public class PostgresExecutionRepository implements ExecutionRepository {
                   AND worker_id = ?
                   AND lease_token = ?
                 """;
-        return executeUpdate(sql, statement -> {
+        int updated = executeUpdate(sql, statement -> {
             statement.setTimestamp(1, toTimestamp(finishedAt));
             statement.setTimestamp(2, toTimestamp(nextRetryAt));
             statement.setString(3, errorClass);
@@ -304,7 +324,12 @@ public class PostgresExecutionRepository implements ExecutionRepository {
             statement.setObject(6, executionId);
             statement.setString(7, workerId);
             statement.setString(8, leaseToken);
-        }) > 0;
+        });
+        if (updated > 0) {
+            updateCurrentAttempt(executionId, null, finishedAt, "FAILED_RETRYABLE", errorClass, errorSummary);
+            return true;
+        }
+        return false;
     }
 
     @Override
@@ -322,7 +347,7 @@ public class PostgresExecutionRepository implements ExecutionRepository {
                   AND worker_id = ?
                   AND lease_token = ?
                 """;
-        return executeUpdate(sql, statement -> {
+        int updated = executeUpdate(sql, statement -> {
             statement.setTimestamp(1, toTimestamp(finishedAt));
             statement.setString(2, errorClass);
             statement.setString(3, errorSummary);
@@ -330,7 +355,12 @@ public class PostgresExecutionRepository implements ExecutionRepository {
             statement.setObject(5, executionId);
             statement.setString(6, workerId);
             statement.setString(7, leaseToken);
-        }) > 0;
+        });
+        if (updated > 0) {
+            updateCurrentAttempt(executionId, null, finishedAt, "FAILED_FINAL", errorClass, errorSummary);
+            return true;
+        }
+        return false;
     }
 
     @Override
@@ -348,14 +378,19 @@ public class PostgresExecutionRepository implements ExecutionRepository {
                   AND worker_id = ?
                   AND lease_token = ?
                 """;
-        return executeUpdate(sql, statement -> {
+        int updated = executeUpdate(sql, statement -> {
             statement.setTimestamp(1, toTimestamp(finishedAt));
             statement.setString(2, reason);
             statement.setTimestamp(3, toTimestamp(finishedAt));
             statement.setObject(4, executionId);
             statement.setString(5, workerId);
             statement.setString(6, leaseToken);
-        }) > 0;
+        });
+        if (updated > 0) {
+            updateCurrentAttempt(executionId, null, finishedAt, "TIMED_OUT", "TimeoutException", reason);
+            return true;
+        }
+        return false;
     }
 
     @Override
@@ -395,14 +430,19 @@ public class PostgresExecutionRepository implements ExecutionRepository {
                   AND worker_id = ?
                   AND lease_token = ?
                 """;
-        return executeUpdate(sql, statement -> {
+        int updated = executeUpdate(sql, statement -> {
             statement.setTimestamp(1, toTimestamp(finishedAt));
             statement.setString(2, reason);
             statement.setTimestamp(3, toTimestamp(finishedAt));
             statement.setObject(4, executionId);
             statement.setString(5, workerId);
             statement.setString(6, leaseToken);
-        }) > 0;
+        });
+        if (updated > 0) {
+            updateCurrentAttempt(executionId, null, finishedAt, "CANCELLED", null, reason);
+            return true;
+        }
+        return false;
     }
 
     @Override
@@ -532,6 +572,80 @@ public class PostgresExecutionRepository implements ExecutionRepository {
         } catch (SQLException exception) {
             throw repositoryException("execute update", exception);
         }
+    }
+
+    private void upsertExecutionAttemptClaim(Connection connection, JobExecution execution, Instant claimedAt) throws SQLException {
+        String sql = """
+                INSERT INTO job_execution_attempt(
+                    execution_id,
+                    attempt_no,
+                    worker_id,
+                    lease_token,
+                    fencing_token,
+                    claimed_at,
+                    status,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, 'CLAIMED', ?)
+                ON CONFLICT (execution_id, attempt_no) DO UPDATE
+                SET worker_id = EXCLUDED.worker_id,
+                    lease_token = EXCLUDED.lease_token,
+                    fencing_token = EXCLUDED.fencing_token,
+                    claimed_at = EXCLUDED.claimed_at,
+                    status = EXCLUDED.status
+                """;
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setObject(1, execution.executionId());
+            statement.setInt(2, execution.attempt());
+            statement.setString(3, execution.workerId());
+            statement.setString(4, execution.leaseToken());
+            statement.setLong(5, execution.fencingToken());
+            statement.setTimestamp(6, toTimestamp(claimedAt));
+            statement.setTimestamp(7, toTimestamp(claimedAt));
+            statement.executeUpdate();
+        }
+    }
+
+    private void updateCurrentAttempt(
+            UUID executionId,
+            Instant startedAt,
+            Instant finishedAt,
+            String status,
+            String errorClass,
+            String errorSummary
+    ) {
+        String sql = """
+                UPDATE job_execution_attempt a
+                SET started_at = COALESCE(?, a.started_at),
+                    finished_at = COALESCE(?, a.finished_at),
+                    status = ?,
+                    error_class = ?,
+                    error_summary = ?,
+                    duration_ms = CASE
+                        WHEN COALESCE(?, a.finished_at) IS NOT NULL AND COALESCE(?, a.started_at) IS NOT NULL
+                            THEN GREATEST(
+                                0,
+                                CAST(EXTRACT(EPOCH FROM (COALESCE(?, a.finished_at) - COALESCE(?, a.started_at))) * 1000 AS BIGINT)
+                            )
+                        ELSE a.duration_ms
+                    END
+                FROM job_execution e
+                WHERE e.execution_id = ?
+                  AND a.execution_id = e.execution_id
+                  AND a.attempt_no = e.attempt
+                """;
+        executeUpdate(sql, statement -> {
+            statement.setTimestamp(1, toTimestamp(startedAt));
+            statement.setTimestamp(2, toTimestamp(finishedAt));
+            statement.setString(3, status);
+            statement.setString(4, errorClass);
+            statement.setString(5, errorSummary);
+            statement.setTimestamp(6, toTimestamp(finishedAt));
+            statement.setTimestamp(7, toTimestamp(startedAt));
+            statement.setTimestamp(8, toTimestamp(finishedAt));
+            statement.setTimestamp(9, toTimestamp(startedAt));
+            statement.setObject(10, executionId);
+        });
     }
 
     private JobExecution mapExecution(ResultSet resultSet) throws SQLException {

@@ -111,6 +111,8 @@ class PostgresExecutionRepositoryTest {
         assertFalse(secondClaim.isPresent());
         assertEquals("CLAIMED", status(executionId));
         assertEquals(1L, fencingToken(executionId));
+        assertEquals("CLAIMED", latestAttemptStatus(executionId));
+        assertEquals(now, latestAttemptClaimedAt(executionId));
     }
 
     @Test
@@ -165,6 +167,9 @@ class PostgresExecutionRepositoryTest {
         assertTrue(markedSucceeded);
         assertEquals("SUCCEEDED", status(executionId));
         assertNotNull(finishedAt(executionId));
+        assertEquals("SUCCEEDED", latestAttemptStatus(executionId));
+        assertNotNull(latestAttemptStartedAt(executionId));
+        assertNotNull(latestAttemptFinishedAt(executionId));
     }
 
     @Test
@@ -436,6 +441,50 @@ class PostgresExecutionRepositoryTest {
         }
     }
 
+    private String latestAttemptStatus(UUID executionId) throws SQLException {
+        String sql = """
+                SELECT status
+                FROM job_execution_attempt
+                WHERE execution_id = ?
+                ORDER BY attempt_no DESC
+                LIMIT 1
+                """;
+        return queryString(sql, executionId);
+    }
+
+    private Instant latestAttemptClaimedAt(UUID executionId) throws SQLException {
+        String sql = """
+                SELECT claimed_at
+                FROM job_execution_attempt
+                WHERE execution_id = ?
+                ORDER BY attempt_no DESC
+                LIMIT 1
+                """;
+        return queryInstant(sql, executionId);
+    }
+
+    private Instant latestAttemptStartedAt(UUID executionId) throws SQLException {
+        String sql = """
+                SELECT started_at
+                FROM job_execution_attempt
+                WHERE execution_id = ?
+                ORDER BY attempt_no DESC
+                LIMIT 1
+                """;
+        return queryInstant(sql, executionId);
+    }
+
+    private Instant latestAttemptFinishedAt(UUID executionId) throws SQLException {
+        String sql = """
+                SELECT finished_at
+                FROM job_execution_attempt
+                WHERE execution_id = ?
+                ORDER BY attempt_no DESC
+                LIMIT 1
+                """;
+        return queryInstant(sql, executionId);
+    }
+
     private int attempt(UUID executionId) throws SQLException {
         String sql = "SELECT attempt FROM job_execution WHERE execution_id = ?";
         try (
@@ -489,6 +538,20 @@ class PostgresExecutionRepositoryTest {
             try (ResultSet resultSet = statement.executeQuery()) {
                 resultSet.next();
                 return resultSet.getString(1);
+            }
+        }
+    }
+
+    private Instant queryInstant(String sql, UUID executionId) throws SQLException {
+        try (
+                Connection connection = dataSource.getConnection();
+                PreparedStatement statement = connection.prepareStatement(sql)
+        ) {
+            statement.setObject(1, executionId);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                resultSet.next();
+                Timestamp timestamp = resultSet.getTimestamp(1);
+                return timestamp == null ? null : timestamp.toInstant();
             }
         }
     }
