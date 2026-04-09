@@ -112,7 +112,7 @@ CREATE TABLE IF NOT EXISTS job_trigger_request (
 );
 
 CREATE TABLE IF NOT EXISTS job_audit_event (
-    event_id                 BIGSERIAL PRIMARY KEY,
+    event_id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     event_type               TEXT NOT NULL,
     job_key                  TEXT REFERENCES job_definition(job_key),
     execution_id             UUID REFERENCES job_execution(execution_id),
