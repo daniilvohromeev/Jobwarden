@@ -23,6 +23,7 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -190,6 +191,44 @@ class SchedulerMaterializationLoopTest {
         assertEquals(now.plusSeconds(120), cursorRepository.lastUpdatedCursor.nextMaterializeAt());
     }
 
+    @Test
+    void shouldHonorPersistedPausedStateWhenPersistedVersionIsHigher() {
+        Instant now = Instant.parse("2026-01-01T00:00:00Z");
+        InMemoryJobRegistry registry = new InMemoryJobRegistry();
+        registry.register(new org.jobgovernance.core.api.JobRegistry.JobRegistration<>(
+                definitionWithFixedDelay("job-persisted-paused", 4),
+                payloadClass(),
+                org.jobgovernance.core.api.JobRegistry.HandlerType.SYNC,
+                (context, token) -> "ok",
+                null
+        ));
+        FakeScheduleEvaluator evaluator = new FakeScheduleEvaluator();
+        evaluator.evaluationResult = new ScheduleEvaluator.EvaluationResult(
+                List.of(new ScheduleEvaluator.DueExecutionCandidate("job-persisted-paused", now, "CRON", "dedupe-1")),
+                now.plusSeconds(60)
+        );
+        FakeRepository repository = new FakeRepository();
+        FakeJobDefinitionRepository definitionRepository = new FakeJobDefinitionRepository();
+        definitionRepository.seed(withVersionAndState(definitionWithFixedDelay("job-persisted-paused", 4), 2, JobDefinitionState.PAUSED));
+
+        SchedulerMaterializationLoop loop = new SchedulerMaterializationLoop(
+                registry,
+                evaluator,
+                repository,
+                null,
+                definitionRepository,
+                10,
+                Duration.ofSeconds(5),
+                Clock.fixed(now, ZoneOffset.UTC)
+        );
+
+        int inserted = loop.materializeOnce(now);
+
+        assertEquals(0, inserted);
+        assertTrue(repository.inserts.isEmpty());
+        assertTrue(definitionRepository.upserts.isEmpty());
+    }
+
     private static JobDefinition definitionWithFixedDelay(String jobKey, int maxAttempts) {
         return new JobDefinition(
                 jobKey,
@@ -249,9 +288,13 @@ class SchedulerMaterializationLoopTest {
 
     private static JobDefinition sampleDefinition(String jobKey, JobDefinitionState state) {
         JobDefinition base = definitionWithFixedDelay(jobKey, 3);
+        return withVersionAndState(base, base.version(), state);
+    }
+
+    private static JobDefinition withVersionAndState(JobDefinition base, int version, JobDefinitionState state) {
         return new JobDefinition(
                 base.jobKey(),
-                base.version(),
+                version,
                 base.displayName(),
                 base.description(),
                 base.ownerTeam(),
@@ -327,26 +370,35 @@ class SchedulerMaterializationLoopTest {
     }
 
     private static final class FakeJobDefinitionRepository implements JobDefinitionRepository {
+        private final Map<String, JobDefinition> definitions = new HashMap<>();
         private final List<JobDefinition> upserts = new ArrayList<>();
 
         @Override
         public void upsert(JobDefinition definition, Instant now) {
+            definitions.put(definition.jobKey(), definition);
             upserts.add(definition);
         }
 
         @Override
         public Optional<JobDefinition> findByJobKey(String jobKey) {
-            return upserts.stream().filter(definition -> definition.jobKey().equals(jobKey)).findFirst();
+            return Optional.ofNullable(definitions.get(jobKey));
         }
 
         @Override
         public List<JobDefinition> findEnabled(int limit) {
-            return upserts.stream().filter(definition -> definition.state() == JobDefinitionState.ENABLED).toList();
+            return definitions.values().stream()
+                    .filter(definition -> definition.state() == JobDefinitionState.ENABLED)
+                    .limit(limit)
+                    .toList();
         }
 
         @Override
         public boolean updateState(String jobKey, JobDefinitionState targetState, String actor, Instant changedAt) {
             return false;
+        }
+
+        private void seed(JobDefinition definition) {
+            definitions.put(definition.jobKey(), definition);
         }
     }
 }

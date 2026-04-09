@@ -136,14 +136,11 @@ public final class SchedulerMaterializationLoop implements ExecutionEngine.Runna
     int materializeOnce(Instant now) {
         int inserted = 0;
         for (JobRegistry.JobRegistration<?, ?> registration : jobRegistry.all()) {
-            JobDefinition definition = registration.definition();
+            JobDefinition definition = resolveSchedulingDefinition(registration.definition(), now);
             if (definition.state() != JobDefinitionState.ENABLED || definition.schedule().kind() == JobSchedule.Kind.DISABLED) {
                 continue;
             }
             String jobKey = definition.jobKey();
-            if (jobDefinitionRepository != null) {
-                jobDefinitionRepository.upsert(definition, now);
-            }
 
             ScheduleEvaluator.ScheduleCursor cursor = loadCursor(jobKey);
             ScheduleEvaluator.EvaluationResult evaluation = scheduleEvaluator.evaluate(
@@ -245,5 +242,29 @@ public final class SchedulerMaterializationLoop implements ExecutionEngine.Runna
         } catch (RuntimeException exception) {
             log.debug("Failed to persist cursor for jobKey={}, continuing with in-memory cursor", jobKey, exception);
         }
+    }
+
+    private JobDefinition resolveSchedulingDefinition(JobDefinition registryDefinition, Instant now) {
+        if (jobDefinitionRepository == null) {
+            return registryDefinition;
+        }
+        return jobDefinitionRepository.findByJobKey(registryDefinition.jobKey())
+                .map(persistedDefinition -> chooseDefinition(registryDefinition, persistedDefinition, now))
+                .orElseGet(() -> {
+                    jobDefinitionRepository.upsert(registryDefinition, now);
+                    return registryDefinition;
+                });
+    }
+
+    private JobDefinition chooseDefinition(
+            JobDefinition registryDefinition,
+            JobDefinition persistedDefinition,
+            Instant now
+    ) {
+        if (registryDefinition.version() > persistedDefinition.version()) {
+            jobDefinitionRepository.upsert(registryDefinition, now);
+            return registryDefinition;
+        }
+        return persistedDefinition;
     }
 }
