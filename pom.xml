@@ -14,6 +14,7 @@
     <modules>
         <module>jgk-core</module>
         <module>jgk-storage-spi</module>
+        <module>jgk-storage-tck</module>
         <module>jgk-storage-postgres</module>
         <module>jgk-executor-core</module>
         <module>jgk-observability-micrometer</module>
