@@ -15,6 +15,12 @@ public interface ExecutionRepository {
 
     boolean enqueueScheduledExecution(ScheduledExecutionInsert request, Instant createdAt);
 
+    Optional<JobExecution> findExecution(UUID executionId);
+
+    List<JobExecution> findExecutions(String jobKey, String tenantId, int limit);
+
+    Optional<JobExecution> findByIdempotencyKey(String jobKey, String tenantId, String idempotencyKey);
+
     boolean markRunning(UUID executionId, String workerId, String leaseToken, Instant startedAt);
 
     boolean markSucceeded(UUID executionId, String workerId, String leaseToken, String resultSummary, Instant finishedAt);

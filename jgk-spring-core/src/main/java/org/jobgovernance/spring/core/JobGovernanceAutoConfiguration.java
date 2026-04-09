@@ -164,6 +164,16 @@ public class JobGovernanceAutoConfiguration {
     }
 
     @Bean
+    @ConditionalOnBean({JobRegistry.class, ExecutionRepository.class})
+    @ConditionalOnMissingBean
+    public JobGovernanceManagementService jgkManagementService(
+            JobRegistry jobRegistry,
+            ExecutionRepository executionRepository
+    ) {
+        return new DefaultJobGovernanceManagementService(jobRegistry, executionRepository);
+    }
+
+    @Bean
     @ConditionalOnProperty(prefix = "jgk", name = "auto-start", havingValue = "true", matchIfMissing = true)
     @ConditionalOnMissingBean(name = "jgkExecutionEngineLifecycle")
     public ExecutionEngineLifecycle jgkExecutionEngineLifecycle(ExecutionEngine executionEngine) {

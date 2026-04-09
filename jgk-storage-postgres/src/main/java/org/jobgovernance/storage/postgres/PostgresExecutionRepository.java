@@ -143,6 +143,89 @@ public class PostgresExecutionRepository implements ExecutionRepository {
     }
 
     @Override
+    public Optional<JobExecution> findExecution(UUID executionId) {
+        String sql = """
+                SELECT *
+                FROM job_execution
+                WHERE execution_id = ?
+                """;
+        try (
+                Connection connection = dataSource.getConnection();
+                PreparedStatement statement = connection.prepareStatement(sql)
+        ) {
+            statement.setObject(1, executionId);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                if (!resultSet.next()) {
+                    return Optional.empty();
+                }
+                return Optional.of(mapExecution(resultSet));
+            }
+        } catch (SQLException exception) {
+            throw repositoryException("find execution", exception);
+        }
+    }
+
+    @Override
+    public List<JobExecution> findExecutions(String jobKey, String tenantId, int limit) {
+        String sql = """
+                SELECT *
+                FROM job_execution
+                WHERE job_key = ?
+                  AND (? IS NULL OR tenant_id = ?)
+                ORDER BY scheduled_at DESC, execution_id DESC
+                LIMIT ?
+                """;
+        try (
+                Connection connection = dataSource.getConnection();
+                PreparedStatement statement = connection.prepareStatement(sql)
+        ) {
+            statement.setString(1, jobKey);
+            statement.setString(2, tenantId);
+            statement.setString(3, tenantId);
+            statement.setInt(4, limit);
+            List<JobExecution> executions = new ArrayList<>(Math.min(limit, 128));
+            try (ResultSet resultSet = statement.executeQuery()) {
+                while (resultSet.next()) {
+                    executions.add(mapExecution(resultSet));
+                }
+            }
+            return executions;
+        } catch (SQLException exception) {
+            throw repositoryException("find executions", exception);
+        }
+    }
+
+    @Override
+    public Optional<JobExecution> findByIdempotencyKey(String jobKey, String tenantId, String idempotencyKey) {
+        String sql = """
+                SELECT *
+                FROM job_execution
+                WHERE job_key = ?
+                  AND (? IS NULL OR tenant_id = ?)
+                  AND idempotency_key = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """;
+        try (
+                Connection connection = dataSource.getConnection();
+                PreparedStatement statement = connection.prepareStatement(sql)
+        ) {
+            statement.setString(1, jobKey);
+            statement.setString(2, tenantId);
+            statement.setString(3, tenantId);
+            statement.setString(4, idempotencyKey);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                if (!resultSet.next()) {
+                    return Optional.empty();
+                }
+                return Optional.of(mapExecution(resultSet));
+            }
+        } catch (SQLException exception) {
+            throw repositoryException("find by idempotency key", exception);
+        }
+    }
+
+    @Override
     public boolean markRunning(UUID executionId, String workerId, String leaseToken, Instant startedAt) {
         String sql = """
                 UPDATE job_execution

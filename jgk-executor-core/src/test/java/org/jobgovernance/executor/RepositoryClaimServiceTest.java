@@ -130,6 +130,21 @@ class RepositoryClaimServiceTest {
         }
 
         @Override
+        public Optional<JobExecution> findExecution(UUID executionId) {
+            return Optional.empty();
+        }
+
+        @Override
+        public List<JobExecution> findExecutions(String jobKey, String tenantId, int limit) {
+            return List.of();
+        }
+
+        @Override
+        public Optional<JobExecution> findByIdempotencyKey(String jobKey, String tenantId, String idempotencyKey) {
+            return Optional.empty();
+        }
+
+        @Override
         public boolean markRunning(UUID executionId, String workerId, String leaseToken, Instant startedAt) {
             return false;
         }

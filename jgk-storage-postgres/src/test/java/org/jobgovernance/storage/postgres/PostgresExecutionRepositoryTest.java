@@ -136,11 +136,18 @@ class PostgresExecutionRepositoryTest {
 
         boolean inserted = repository.enqueueScheduledExecution(request, now);
         boolean duplicate = repository.enqueueScheduledExecution(request, now.plusSeconds(1));
+        var foundByIdempotency = repository.findByIdempotencyKey("billing.reconcile", null, "idempotency-1");
+        var recentExecutions = repository.findExecutions("billing.reconcile", null, 10);
+        var foundByExecutionId = foundByIdempotency.flatMap(found -> repository.findExecution(found.executionId()));
 
         assertTrue(inserted);
         assertFalse(duplicate);
         assertEquals(1, executionCount("billing.reconcile", scheduledAt));
         assertEquals(5, maxAttempts("billing.reconcile", scheduledAt));
+        assertTrue(foundByIdempotency.isPresent());
+        assertEquals(scheduledAt, foundByIdempotency.get().scheduledAt());
+        assertFalse(recentExecutions.isEmpty());
+        assertTrue(foundByExecutionId.isPresent());
     }
 
     @Test
