@@ -3,7 +3,11 @@ package org.jobgovernance.executor;
 import org.jobgovernance.core.api.JobRegistry;
 import org.jobgovernance.core.api.ScheduleEvaluator;
 import org.jobgovernance.core.model.JobDefinition;
+import org.jobgovernance.core.model.JobDefinitionState;
+import org.jobgovernance.core.model.JobSchedule;
 import org.jobgovernance.storage.spi.ExecutionRepository;
+import org.jobgovernance.storage.spi.JobDefinitionRepository;
+import org.jobgovernance.storage.spi.ScheduleCursorRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -27,12 +31,15 @@ public final class SchedulerMaterializationLoop implements ExecutionEngine.Runna
     private final JobRegistry jobRegistry;
     private final ScheduleEvaluator scheduleEvaluator;
     private final ExecutionRepository executionRepository;
+    private final ScheduleCursorRepository scheduleCursorRepository;
+    private final JobDefinitionRepository jobDefinitionRepository;
     private final int perJobBatch;
     private final Duration interval;
     private final Clock clock;
     private final ScheduledExecutorService scheduler;
     private final AtomicBoolean running = new AtomicBoolean(false);
-    private final ConcurrentMap<String, ScheduleEvaluator.ScheduleCursor> cursors = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, ScheduleEvaluator.ScheduleCursor> inMemoryCursors = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, Long> cursorVersions = new ConcurrentHashMap<>();
 
     public SchedulerMaterializationLoop(
             JobRegistry jobRegistry,
@@ -41,13 +48,45 @@ public final class SchedulerMaterializationLoop implements ExecutionEngine.Runna
             int perJobBatch,
             Duration interval
     ) {
-        this(jobRegistry, scheduleEvaluator, executionRepository, perJobBatch, interval, Clock.systemUTC());
+        this(
+                jobRegistry,
+                scheduleEvaluator,
+                executionRepository,
+                null,
+                null,
+                perJobBatch,
+                interval,
+                Clock.systemUTC()
+        );
+    }
+
+    public SchedulerMaterializationLoop(
+            JobRegistry jobRegistry,
+            ScheduleEvaluator scheduleEvaluator,
+            ExecutionRepository executionRepository,
+            ScheduleCursorRepository scheduleCursorRepository,
+            JobDefinitionRepository jobDefinitionRepository,
+            int perJobBatch,
+            Duration interval
+    ) {
+        this(
+                jobRegistry,
+                scheduleEvaluator,
+                executionRepository,
+                scheduleCursorRepository,
+                jobDefinitionRepository,
+                perJobBatch,
+                interval,
+                Clock.systemUTC()
+        );
     }
 
     SchedulerMaterializationLoop(
             JobRegistry jobRegistry,
             ScheduleEvaluator scheduleEvaluator,
             ExecutionRepository executionRepository,
+            ScheduleCursorRepository scheduleCursorRepository,
+            JobDefinitionRepository jobDefinitionRepository,
             int perJobBatch,
             Duration interval,
             Clock clock
@@ -55,6 +94,8 @@ public final class SchedulerMaterializationLoop implements ExecutionEngine.Runna
         this.jobRegistry = Objects.requireNonNull(jobRegistry, "jobRegistry is required");
         this.scheduleEvaluator = Objects.requireNonNull(scheduleEvaluator, "scheduleEvaluator is required");
         this.executionRepository = Objects.requireNonNull(executionRepository, "executionRepository is required");
+        this.scheduleCursorRepository = scheduleCursorRepository;
+        this.jobDefinitionRepository = jobDefinitionRepository;
         if (perJobBatch < 1) {
             throw new IllegalArgumentException("perJobBatch must be >= 1");
         }
@@ -96,8 +137,15 @@ public final class SchedulerMaterializationLoop implements ExecutionEngine.Runna
         int inserted = 0;
         for (JobRegistry.JobRegistration<?, ?> registration : jobRegistry.all()) {
             JobDefinition definition = registration.definition();
+            if (definition.state() != JobDefinitionState.ENABLED || definition.schedule().kind() == JobSchedule.Kind.DISABLED) {
+                continue;
+            }
             String jobKey = definition.jobKey();
-            ScheduleEvaluator.ScheduleCursor cursor = cursors.get(jobKey);
+            if (jobDefinitionRepository != null) {
+                jobDefinitionRepository.upsert(definition, now);
+            }
+
+            ScheduleEvaluator.ScheduleCursor cursor = loadCursor(jobKey);
             ScheduleEvaluator.EvaluationResult evaluation = scheduleEvaluator.evaluate(
                     definition,
                     cursor,
@@ -133,13 +181,13 @@ public final class SchedulerMaterializationLoop implements ExecutionEngine.Runna
                 }
             }
 
-            cursors.put(jobKey, new ScheduleEvaluator.ScheduleCursor(jobKey, now, evaluation.nextFireAt()));
+            storeCursor(jobKey, now, evaluation.nextFireAt());
         }
         return inserted;
     }
 
     Map<String, ScheduleEvaluator.ScheduleCursor> snapshotCursors() {
-        return Map.copyOf(cursors);
+        return Map.copyOf(inMemoryCursors);
     }
 
     private void tickSafely() {
@@ -153,6 +201,49 @@ public final class SchedulerMaterializationLoop implements ExecutionEngine.Runna
             }
         } catch (RuntimeException exception) {
             log.warn("Scheduler loop failed", exception);
+        }
+    }
+
+    private ScheduleEvaluator.ScheduleCursor loadCursor(String jobKey) {
+        if (scheduleCursorRepository != null) {
+            return scheduleCursorRepository.findByJobKey(jobKey)
+                    .map(cursor -> {
+                        ScheduleEvaluator.ScheduleCursor mapped = new ScheduleEvaluator.ScheduleCursor(
+                                cursor.jobKey(),
+                                cursor.lastEvaluatedAt(),
+                                cursor.nextMaterializeAt()
+                        );
+                        inMemoryCursors.put(jobKey, mapped);
+                        cursorVersions.put(jobKey, cursor.cursorVersion());
+                        return mapped;
+                    })
+                    .orElseGet(() -> {
+                        cursorVersions.putIfAbsent(jobKey, 0L);
+                        return inMemoryCursors.get(jobKey);
+                    });
+        }
+        return inMemoryCursors.get(jobKey);
+    }
+
+    private void storeCursor(
+            String jobKey,
+            Instant evaluatedAt,
+            Instant nextFireAt
+    ) {
+        ScheduleEvaluator.ScheduleCursor current = new ScheduleEvaluator.ScheduleCursor(jobKey, evaluatedAt, nextFireAt);
+        inMemoryCursors.put(jobKey, current);
+        if (scheduleCursorRepository == null) {
+            return;
+        }
+        long cursorVersion = cursorVersions.getOrDefault(jobKey, 0L);
+        try {
+            scheduleCursorRepository.updateCursor(
+                    new ScheduleCursorRepository.ScheduleCursor(jobKey, evaluatedAt, nextFireAt, cursorVersion),
+                    evaluatedAt
+            );
+            cursorVersions.put(jobKey, cursorVersion + 1);
+        } catch (RuntimeException exception) {
+            log.debug("Failed to persist cursor for jobKey={}, continuing with in-memory cursor", jobKey, exception);
         }
     }
 }

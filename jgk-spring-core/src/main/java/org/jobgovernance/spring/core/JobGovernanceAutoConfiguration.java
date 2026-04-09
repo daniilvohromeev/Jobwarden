@@ -17,11 +17,14 @@ import org.jobgovernance.executor.RepositoryClaimService;
 import org.jobgovernance.executor.RetryRequeueLoop;
 import org.jobgovernance.executor.SchedulerMaterializationLoop;
 import org.jobgovernance.storage.spi.ExecutionRepository;
+import org.jobgovernance.storage.spi.JobDefinitionRepository;
+import org.jobgovernance.storage.spi.ScheduleCursorRepository;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.beans.factory.annotation.Qualifier;
 
@@ -55,12 +58,16 @@ public class JobGovernanceAutoConfiguration {
             JobRegistry jobRegistry,
             ScheduleEvaluator scheduleEvaluator,
             ExecutionRepository executionRepository,
+            ObjectProvider<ScheduleCursorRepository> scheduleCursorRepositoryProvider,
+            ObjectProvider<JobDefinitionRepository> jobDefinitionRepositoryProvider,
             JgkProperties properties
     ) {
         return new SchedulerMaterializationLoop(
                 jobRegistry,
                 scheduleEvaluator,
                 executionRepository,
+                scheduleCursorRepositoryProvider.getIfAvailable(),
+                jobDefinitionRepositoryProvider.getIfAvailable(),
                 properties.scheduleBatchSize(),
                 properties.schedulerInterval()
         );

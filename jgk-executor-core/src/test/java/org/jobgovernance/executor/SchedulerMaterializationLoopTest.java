@@ -13,6 +13,8 @@ import org.jobgovernance.core.model.MisfirePolicy;
 import org.jobgovernance.core.policy.IdempotencyStrategy;
 import org.jobgovernance.core.policy.RetryStrategies;
 import org.jobgovernance.core.policy.TimeoutPolicy;
+import org.jobgovernance.storage.spi.JobDefinitionRepository;
+import org.jobgovernance.storage.spi.ScheduleCursorRepository;
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
@@ -28,6 +30,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SchedulerMaterializationLoopTest {
 
@@ -56,6 +59,8 @@ class SchedulerMaterializationLoopTest {
                 registry,
                 evaluator,
                 repository,
+                null,
+                null,
                 10,
                 Duration.ofSeconds(5),
                 clock
@@ -96,6 +101,8 @@ class SchedulerMaterializationLoopTest {
                 registry,
                 evaluator,
                 repository,
+                null,
+                null,
                 10,
                 Duration.ofSeconds(5),
                 Clock.fixed(now, ZoneOffset.UTC)
@@ -105,6 +112,82 @@ class SchedulerMaterializationLoopTest {
 
         assertEquals(1, repository.inserts.size());
         assertEquals(3, repository.inserts.getFirst().request().maxAttempts());
+    }
+
+    @Test
+    void shouldSkipNonEnabledDefinitions() {
+        Instant now = Instant.parse("2026-01-01T00:00:00Z");
+        InMemoryJobRegistry registry = new InMemoryJobRegistry();
+        registry.register(new org.jobgovernance.core.api.JobRegistry.JobRegistration<>(
+                sampleDefinition("job-disabled", JobDefinitionState.PAUSED),
+                payloadClass(),
+                org.jobgovernance.core.api.JobRegistry.HandlerType.SYNC,
+                (context, token) -> "ok",
+                null
+        ));
+        FakeScheduleEvaluator evaluator = new FakeScheduleEvaluator();
+        evaluator.evaluationResult = new ScheduleEvaluator.EvaluationResult(
+                List.of(new ScheduleEvaluator.DueExecutionCandidate("job-disabled", now, "CRON", "dedupe-1")),
+                now.plusSeconds(30)
+        );
+        FakeRepository repository = new FakeRepository();
+        SchedulerMaterializationLoop loop = new SchedulerMaterializationLoop(
+                registry,
+                evaluator,
+                repository,
+                null,
+                null,
+                10,
+                Duration.ofSeconds(5),
+                Clock.fixed(now, ZoneOffset.UTC)
+        );
+
+        int inserted = loop.materializeOnce(now);
+
+        assertEquals(0, inserted);
+        assertTrue(repository.inserts.isEmpty());
+    }
+
+    @Test
+    void shouldPersistDefinitionAndCursorWhenRepositoriesProvided() {
+        Instant now = Instant.parse("2026-01-01T00:00:00Z");
+        InMemoryJobRegistry registry = new InMemoryJobRegistry();
+        registry.register(new org.jobgovernance.core.api.JobRegistry.JobRegistration<>(
+                definitionWithFixedDelay("job-persisted", 4),
+                payloadClass(),
+                org.jobgovernance.core.api.JobRegistry.HandlerType.SYNC,
+                (context, token) -> "ok",
+                null
+        ));
+        FakeScheduleEvaluator evaluator = new FakeScheduleEvaluator();
+        evaluator.evaluationResult = new ScheduleEvaluator.EvaluationResult(
+                List.of(new ScheduleEvaluator.DueExecutionCandidate("job-persisted", now, "CRON", "dedupe-persisted")),
+                now.plusSeconds(120)
+        );
+        FakeRepository repository = new FakeRepository();
+        FakeScheduleCursorRepository cursorRepository = new FakeScheduleCursorRepository();
+        cursorRepository.cursor = new ScheduleCursorRepository.ScheduleCursor("job-persisted", now.minusSeconds(30), now.minusSeconds(10), 5L);
+        FakeJobDefinitionRepository definitionRepository = new FakeJobDefinitionRepository();
+
+        SchedulerMaterializationLoop loop = new SchedulerMaterializationLoop(
+                registry,
+                evaluator,
+                repository,
+                cursorRepository,
+                definitionRepository,
+                10,
+                Duration.ofSeconds(5),
+                Clock.fixed(now, ZoneOffset.UTC)
+        );
+
+        int inserted = loop.materializeOnce(now);
+
+        assertEquals(1, inserted);
+        assertEquals(1, definitionRepository.upserts.size());
+        assertEquals("job-persisted", definitionRepository.upserts.getFirst().jobKey());
+        assertNotNull(cursorRepository.lastUpdatedCursor);
+        assertEquals(5L, cursorRepository.lastUpdatedCursor.cursorVersion());
+        assertEquals(now.plusSeconds(120), cursorRepository.lastUpdatedCursor.nextMaterializeAt());
     }
 
     private static JobDefinition definitionWithFixedDelay(String jobKey, int maxAttempts) {
@@ -164,6 +247,26 @@ class SchedulerMaterializationLoopTest {
         );
     }
 
+    private static JobDefinition sampleDefinition(String jobKey, JobDefinitionState state) {
+        JobDefinition base = definitionWithFixedDelay(jobKey, 3);
+        return new JobDefinition(
+                base.jobKey(),
+                base.version(),
+                base.displayName(),
+                base.description(),
+                base.ownerTeam(),
+                base.tags(),
+                base.executionMode(),
+                base.schedule(),
+                base.policy(),
+                base.payloadSchemaVersion(),
+                state,
+                base.manualTriggerable(),
+                base.internalOnly(),
+                base.tenantScope()
+        );
+    }
+
     private static final class FakeScheduleEvaluator implements ScheduleEvaluator {
         private EvaluationResult evaluationResult = new EvaluationResult(List.of(), null);
 
@@ -199,6 +302,51 @@ class SchedulerMaterializationLoopTest {
 
         @Override
         public void afterExecution(ExecutionContext<?> context, String deduplicationKey, AfterExecutionResult result) {
+        }
+    }
+
+    private static final class FakeScheduleCursorRepository implements ScheduleCursorRepository {
+        private ScheduleCursor cursor;
+        private ScheduleCursor lastUpdatedCursor;
+
+        @Override
+        public Optional<ScheduleCursor> findByJobKey(String jobKey) {
+            return Optional.ofNullable(cursor);
+        }
+
+        @Override
+        public void updateCursor(ScheduleCursor cursor, Instant updatedAt) {
+            this.lastUpdatedCursor = cursor;
+            this.cursor = new ScheduleCursor(
+                    cursor.jobKey(),
+                    cursor.lastEvaluatedAt(),
+                    cursor.nextMaterializeAt(),
+                    cursor.cursorVersion() + 1
+            );
+        }
+    }
+
+    private static final class FakeJobDefinitionRepository implements JobDefinitionRepository {
+        private final List<JobDefinition> upserts = new ArrayList<>();
+
+        @Override
+        public void upsert(JobDefinition definition, Instant now) {
+            upserts.add(definition);
+        }
+
+        @Override
+        public Optional<JobDefinition> findByJobKey(String jobKey) {
+            return upserts.stream().filter(definition -> definition.jobKey().equals(jobKey)).findFirst();
+        }
+
+        @Override
+        public List<JobDefinition> findEnabled(int limit) {
+            return upserts.stream().filter(definition -> definition.state() == JobDefinitionState.ENABLED).toList();
+        }
+
+        @Override
+        public boolean updateState(String jobKey, JobDefinitionState targetState, String actor, Instant changedAt) {
+            return false;
         }
     }
 }
