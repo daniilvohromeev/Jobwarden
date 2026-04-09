@@ -16,6 +16,8 @@ public interface JobGovernanceManagementService {
 
     ExecutionView triggerAt(String jobKey, String tenantId, String actor, String payloadJson, Instant triggerAt, String idempotencyKey);
 
+    ExecutionView retryExecution(UUID executionId, String actor);
+
     boolean pauseJob(String jobKey, String actor);
 
     boolean resumeJob(String jobKey, String actor);

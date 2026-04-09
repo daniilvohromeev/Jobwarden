@@ -114,6 +114,79 @@ class JobGovernanceReactiveAdminControllerTest {
     }
 
     @Test
+    void retryShouldReturnAcceptedExecution() {
+        UUID sourceExecutionId = UUID.randomUUID();
+        UUID retryExecutionId = UUID.randomUUID();
+        when(managementService.retryExecution(sourceExecutionId, "ops-user")).thenReturn(
+                new JobGovernanceManagementService.ExecutionView(
+                        retryExecutionId,
+                        "billing.reconcile",
+                        "SCHEDULED",
+                        Instant.parse("2026-01-01T00:00:30Z"),
+                        null,
+                        null,
+                        1,
+                        null,
+                        Map.of("self", "/jgk/v1/executions/" + retryExecutionId)
+                )
+        );
+
+        webTestClient.post()
+                .uri("/jgk/v1/executions/{executionId}/retry", sourceExecutionId)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(new JobGovernanceReactiveAdminController.RetryRequest("ops-user"))
+                .exchange()
+                .expectStatus().isAccepted()
+                .expectBody()
+                .jsonPath("$.executionId").isEqualTo(retryExecutionId.toString())
+                .jsonPath("$.status").isEqualTo("SCHEDULED");
+
+        verify(managementService).retryExecution(sourceExecutionId, "ops-user");
+    }
+
+    @Test
+    void triggerAtShouldReturnAcceptedExecution() {
+        UUID executionId = UUID.randomUUID();
+        Instant triggerAt = Instant.parse("2026-01-01T00:05:00Z");
+        when(managementService.triggerAt(
+                "billing.reconcile",
+                "tenant-a",
+                "ops-user",
+                "{\"force\":true}",
+                triggerAt,
+                "idem-2"
+        )).thenReturn(new JobGovernanceManagementService.ExecutionView(
+                executionId,
+                "billing.reconcile",
+                "SCHEDULED",
+                triggerAt,
+                null,
+                null,
+                1,
+                null,
+                Map.of("self", "/jgk/v1/executions/" + executionId)
+        ));
+
+        webTestClient.post()
+                .uri("/jgk/v1/jobs/{jobKey}/trigger-at", "billing.reconcile")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(new JobGovernanceReactiveAdminController.TriggerAtRequest(
+                        "tenant-a",
+                        "ops-user",
+                        "{\"force\":true}",
+                        triggerAt,
+                        "idem-2"
+                ))
+                .exchange()
+                .expectStatus().isAccepted()
+                .expectBody()
+                .jsonPath("$.executionId").isEqualTo(executionId.toString())
+                .jsonPath("$.status").isEqualTo("SCHEDULED");
+
+        verify(managementService).triggerAt("billing.reconcile", "tenant-a", "ops-user", "{\"force\":true}", triggerAt, "idem-2");
+    }
+
+    @Test
     void readinessShouldExposeRuntimeStatus() {
         when(runtimeStatusService.readiness()).thenReturn(new JobGovernanceRuntimeStatusService.RuntimeStatus(
                 "READY",

@@ -167,6 +167,15 @@ public class JobGovernanceAdminController {
         managementService.cancelExecution(executionId, request.actor(), request.reason());
     }
 
+    @PostMapping("/executions/{executionId}/retry")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public JobGovernanceManagementService.ExecutionView retryExecution(
+            @PathVariable("executionId") UUID executionId,
+            @RequestBody RetryRequest request
+    ) {
+        return managementService.retryExecution(executionId, request.actor());
+    }
+
     public record TriggerRequest(String tenantId, String actor, String payloadJson, String idempotencyKey) {
     }
 
@@ -174,5 +183,8 @@ public class JobGovernanceAdminController {
     }
 
     public record CancelRequest(String actor, String reason) {
+    }
+
+    public record RetryRequest(String actor) {
     }
 }

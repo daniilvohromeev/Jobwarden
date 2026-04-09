@@ -113,6 +113,34 @@ class JobGovernanceAdminControllerTest {
     }
 
     @Test
+    void retryExecutionShouldReturnAcceptedExecution() throws Exception {
+        UUID sourceExecutionId = UUID.randomUUID();
+        UUID retryExecutionId = UUID.randomUUID();
+        when(managementService.retryExecution(sourceExecutionId, "ops-user")).thenReturn(
+                new JobGovernanceManagementService.ExecutionView(
+                        retryExecutionId,
+                        "billing.reconcile",
+                        "SCHEDULED",
+                        Instant.parse("2026-01-01T00:00:30Z"),
+                        null,
+                        null,
+                        1,
+                        null,
+                        Map.of("self", "/jgk/v1/executions/" + retryExecutionId)
+                )
+        );
+
+        mockMvc.perform(post("/jgk/v1/executions/{executionId}/retry", sourceExecutionId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsBytes(new JobGovernanceAdminController.RetryRequest("ops-user"))))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.executionId").value(retryExecutionId.toString()))
+                .andExpect(jsonPath("$.status").value("SCHEDULED"));
+
+        verify(managementService).retryExecution(sourceExecutionId, "ops-user");
+    }
+
+    @Test
     void healthShouldExposeRuntimeStatus() throws Exception {
         when(runtimeStatusService.health()).thenReturn(new JobGovernanceRuntimeStatusService.RuntimeStatus(
                 "UP",

@@ -94,6 +94,59 @@ public final class DefaultJobGovernanceManagementService implements JobGovernanc
     }
 
     @Override
+    public ExecutionView retryExecution(UUID executionId, String actor) {
+        UUID originalExecutionId = requireExecutionId(executionId);
+        String normalizedActor = sanitizeActor(actor);
+        JobExecution sourceExecution = executionRepository.findExecution(originalExecutionId)
+                .orElseThrow(() -> new IllegalArgumentException("Unknown executionId=" + originalExecutionId));
+
+        JobRegistry.JobRegistration<?, ?> registration = jobRegistry.findByJobKey(sourceExecution.jobKey())
+                .orElseThrow(() -> new IllegalStateException("Unknown jobKey=" + sourceExecution.jobKey()));
+        int maxAttempts = registration.definition().policy().retryStrategy()
+                .maxAttemptsHint()
+                .orElse(DEFAULT_MAX_ATTEMPTS);
+        Instant now = clock.instant();
+        String retryIdempotencyKey = "retry|" + originalExecutionId + "|" + now.toEpochMilli();
+        executionRepository.enqueueScheduledExecution(
+                new ExecutionRepository.ScheduledExecutionInsert(
+                        sourceExecution.jobKey(),
+                        sourceExecution.tenantId(),
+                        TriggerType.RETRY.name(),
+                        now,
+                        now,
+                        maxAttempts,
+                        sourceExecution.payloadRef(),
+                        "retry|" + originalExecutionId + "|" + now.toEpochMilli() + "|" + UUID.randomUUID(),
+                        sourceExecution.correlationId(),
+                        sourceExecution.traceId(),
+                        sourceExecution.executionId().toString(),
+                        sourceExecution.executionId(),
+                        retryIdempotencyKey,
+                        null
+                ),
+                now
+        );
+        ExecutionView retryExecution = executionRepository.findByIdempotencyKey(
+                        sourceExecution.jobKey(),
+                        sourceExecution.tenantId(),
+                        retryIdempotencyKey
+                )
+                .map(this::toExecutionView)
+                .orElseThrow(() -> new IllegalStateException("Unable to resolve retry execution after enqueue"));
+        appendAudit(
+                "EXECUTION_RETRY_ENQUEUED",
+                sourceExecution.jobKey(),
+                retryExecution.executionId(),
+                normalizedActor,
+                Map.of(
+                        "sourceExecutionId", originalExecutionId.toString(),
+                        "tenantId", sourceExecution.tenantId() == null ? "" : sourceExecution.tenantId()
+                )
+        );
+        return retryExecution;
+    }
+
+    @Override
     public boolean pauseJob(String jobKey, String actor) {
         return updateDefinitionState(jobKey, JobDefinitionState.PAUSED, actor);
     }

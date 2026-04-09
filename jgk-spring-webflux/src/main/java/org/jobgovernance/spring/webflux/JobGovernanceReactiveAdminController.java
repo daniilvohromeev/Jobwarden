@@ -87,6 +87,42 @@ public class JobGovernanceReactiveAdminController {
         );
     }
 
+    @PostMapping("/jobs/{jobKey}/trigger-at")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public Mono<JobGovernanceManagementService.ExecutionView> triggerAt(
+            @PathVariable("jobKey") String jobKey,
+            @RequestBody TriggerAtRequest request
+    ) {
+        return Mono.fromSupplier(
+                () -> managementService.triggerAt(
+                        jobKey,
+                        request.tenantId(),
+                        request.actor(),
+                        request.payloadJson(),
+                        request.triggerAt(),
+                        request.idempotencyKey()
+                )
+        );
+    }
+
+    @PostMapping("/jobs/{jobKey}/pause")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public Mono<Void> pauseJob(
+            @PathVariable("jobKey") String jobKey,
+            @RequestParam(name = "actor") String actor
+    ) {
+        return Mono.fromRunnable(() -> managementService.pauseJob(jobKey, actor));
+    }
+
+    @PostMapping("/jobs/{jobKey}/resume")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public Mono<Void> resumeJob(
+            @PathVariable("jobKey") String jobKey,
+            @RequestParam(name = "actor") String actor
+    ) {
+        return Mono.fromRunnable(() -> managementService.resumeJob(jobKey, actor));
+    }
+
     @PostMapping("/executions/{executionId}/cancel")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public Mono<Void> cancelExecution(
@@ -94,6 +130,24 @@ public class JobGovernanceReactiveAdminController {
             @RequestBody CancelRequest request
     ) {
         return Mono.fromRunnable(() -> managementService.cancelExecution(executionId, request.actor(), request.reason()));
+    }
+
+    @PostMapping("/executions/{executionId}/retry")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public Mono<JobGovernanceManagementService.ExecutionView> retryExecution(
+            @PathVariable("executionId") UUID executionId,
+            @RequestBody RetryRequest request
+    ) {
+        return Mono.fromSupplier(() -> managementService.retryExecution(executionId, request.actor()));
+    }
+
+    @GetMapping("/jobs/{jobKey}/executions")
+    public Flux<JobGovernanceManagementService.ExecutionView> listExecutions(
+            @PathVariable("jobKey") String jobKey,
+            @RequestParam(name = "tenantId", required = false) String tenantId,
+            @RequestParam(name = "limit", defaultValue = "100") int limit
+    ) {
+        return Flux.fromIterable(managementService.listExecutions(jobKey, tenantId, limit));
     }
 
     @GetMapping("/executions/retries")
@@ -138,6 +192,12 @@ public class JobGovernanceReactiveAdminController {
     public record TriggerRequest(String tenantId, String actor, String payloadJson, String idempotencyKey) {
     }
 
+    public record TriggerAtRequest(String tenantId, String actor, String payloadJson, Instant triggerAt, String idempotencyKey) {
+    }
+
     public record CancelRequest(String actor, String reason) {
+    }
+
+    public record RetryRequest(String actor) {
     }
 }

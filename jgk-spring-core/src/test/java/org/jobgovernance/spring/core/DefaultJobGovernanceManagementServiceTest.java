@@ -147,6 +147,36 @@ class DefaultJobGovernanceManagementServiceTest {
     }
 
     @Test
+    void shouldRetryExecutionBySchedulingFollowUpExecution() {
+        Instant now = Instant.parse("2026-01-01T00:00:00Z");
+        InMemoryJobRegistry registry = new InMemoryJobRegistry();
+        registry.register(registration("billing.reconcile", "tenant-a"));
+        FakeExecutionRepository repository = new FakeExecutionRepository();
+        FakeAuditEventRepository auditRepository = new FakeAuditEventRepository();
+        JobExecution source = repository.insertForTest(
+                "billing.reconcile",
+                "tenant-a",
+                now.minusSeconds(30),
+                ExecutionStatus.FAILED_FINAL
+        );
+        DefaultJobGovernanceManagementService service = new DefaultJobGovernanceManagementService(
+                registry,
+                repository,
+                null,
+                null,
+                auditRepository,
+                Clock.fixed(now, ZoneOffset.UTC)
+        );
+
+        JobGovernanceManagementService.ExecutionView retry = service.retryExecution(source.executionId(), "operator");
+
+        assertEquals("billing.reconcile", retry.jobKey());
+        assertEquals("SCHEDULED", retry.status());
+        assertEquals(2, repository.executions.size());
+        assertTrue(auditRepository.events.stream().anyMatch(event -> "EXECUTION_RETRY_ENQUEUED".equals(event.eventType())));
+    }
+
+    @Test
     void shouldListJobsAndExecutionsWithTenantFilter() {
         Instant now = Instant.parse("2026-01-01T00:00:00Z");
         InMemoryJobRegistry registry = new InMemoryJobRegistry();
