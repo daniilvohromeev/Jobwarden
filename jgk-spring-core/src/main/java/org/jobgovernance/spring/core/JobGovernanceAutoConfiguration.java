@@ -23,6 +23,7 @@ import org.jobgovernance.storage.spi.ScheduleCursorRepository;
 import org.jobgovernance.storage.spi.AuditEventRepository;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -30,6 +31,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.beans.factory.annotation.Qualifier;
 
+import javax.sql.DataSource;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -38,6 +40,66 @@ import java.util.concurrent.LinkedBlockingQueue;
 @EnableConfigurationProperties(JgkProperties.class)
 @ConditionalOnProperty(prefix = "jgk", name = "enabled", havingValue = "true", matchIfMissing = true)
 public class JobGovernanceAutoConfiguration {
+
+    @Bean
+    @ConditionalOnBean(DataSource.class)
+    @ConditionalOnClass(name = "org.jobgovernance.storage.postgres.PostgresExecutionRepository")
+    @ConditionalOnMissingBean
+    public ExecutionRepository jgkExecutionRepository(DataSource dataSource) {
+        return instantiatePostgresRepository(
+                "org.jobgovernance.storage.postgres.PostgresExecutionRepository",
+                dataSource,
+                ExecutionRepository.class
+        );
+    }
+
+    @Bean
+    @ConditionalOnBean(DataSource.class)
+    @ConditionalOnClass(name = "org.jobgovernance.storage.postgres.PostgresJobDefinitionRepository")
+    @ConditionalOnMissingBean
+    public JobDefinitionRepository jgkJobDefinitionRepository(DataSource dataSource) {
+        return instantiatePostgresRepository(
+                "org.jobgovernance.storage.postgres.PostgresJobDefinitionRepository",
+                dataSource,
+                JobDefinitionRepository.class
+        );
+    }
+
+    @Bean
+    @ConditionalOnBean(DataSource.class)
+    @ConditionalOnClass(name = "org.jobgovernance.storage.postgres.PostgresScheduleCursorRepository")
+    @ConditionalOnMissingBean
+    public ScheduleCursorRepository jgkScheduleCursorRepository(DataSource dataSource) {
+        return instantiatePostgresRepository(
+                "org.jobgovernance.storage.postgres.PostgresScheduleCursorRepository",
+                dataSource,
+                ScheduleCursorRepository.class
+        );
+    }
+
+    @Bean
+    @ConditionalOnBean(DataSource.class)
+    @ConditionalOnClass(name = "org.jobgovernance.storage.postgres.PostgresManualTriggerRequestRepository")
+    @ConditionalOnMissingBean
+    public ManualTriggerRequestRepository jgkManualTriggerRequestRepository(DataSource dataSource) {
+        return instantiatePostgresRepository(
+                "org.jobgovernance.storage.postgres.PostgresManualTriggerRequestRepository",
+                dataSource,
+                ManualTriggerRequestRepository.class
+        );
+    }
+
+    @Bean
+    @ConditionalOnBean(DataSource.class)
+    @ConditionalOnClass(name = "org.jobgovernance.storage.postgres.PostgresAuditEventRepository")
+    @ConditionalOnMissingBean
+    public AuditEventRepository jgkAuditEventRepository(DataSource dataSource) {
+        return instantiatePostgresRepository(
+                "org.jobgovernance.storage.postgres.PostgresAuditEventRepository",
+                dataSource,
+                AuditEventRepository.class
+        );
+    }
 
     @Bean
     @ConditionalOnMissingBean
@@ -205,6 +267,16 @@ public class JobGovernanceAutoConfiguration {
         } catch (InterruptedException interruptedException) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Interrupted while enqueueing claimed execution", interruptedException);
+        }
+    }
+
+    private static <T> T instantiatePostgresRepository(String className, DataSource dataSource, Class<T> expectedType) {
+        try {
+            Class<?> repositoryClass = Class.forName(className);
+            Object instance = repositoryClass.getConstructor(DataSource.class).newInstance(dataSource);
+            return expectedType.cast(instance);
+        } catch (ReflectiveOperationException exception) {
+            throw new IllegalStateException("Failed to instantiate JGK PostgreSQL repository " + className, exception);
         }
     }
 }
