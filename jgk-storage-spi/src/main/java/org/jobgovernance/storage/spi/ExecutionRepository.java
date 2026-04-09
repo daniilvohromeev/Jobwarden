@@ -64,6 +64,10 @@ public interface ExecutionRepository {
 
     int markDeadExecutions(Instant deadline, String reason, Instant now);
 
+    default int cleanupFinishedExecutions(Instant finishedBefore, int batchSize, Instant now) {
+        return 0;
+    }
+
     record ClaimRequest(
             String workerId,
             Instant claimedAt,

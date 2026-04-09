@@ -326,6 +326,26 @@ class PostgresExecutionRepositoryTest {
     }
 
     @Test
+    void shouldCleanupFinishedExecutionsByRetentionCutoff() throws SQLException {
+        Instant now = Instant.parse("2026-01-01T00:00:00Z");
+        UUID oldSucceeded = UUID.randomUUID();
+        UUID freshSucceeded = UUID.randomUUID();
+        UUID running = UUID.randomUUID();
+        insertExecution(oldSucceeded, "billing.reconcile", "SUCCEEDED", null, null, null, now.minusSeconds(100), now.minusSeconds(100), 1, 3, null);
+        insertExecution(freshSucceeded, "billing.reconcile", "SUCCEEDED", null, null, null, now.minusSeconds(20), now.minusSeconds(20), 1, 3, null);
+        insertExecution(running, "billing.reconcile", "RUNNING", "worker-a", "lease-a", now.plusSeconds(60), now.minusSeconds(15), now.minusSeconds(15), 1, 3, null);
+        setFinishedAt(oldSucceeded, now.minusSeconds(90));
+        setFinishedAt(freshSucceeded, now.minusSeconds(10));
+
+        int deleted = repository.cleanupFinishedExecutions(now.minusSeconds(30), 100, now);
+
+        assertEquals(1, deleted);
+        assertEquals(0, executionCountById(oldSucceeded));
+        assertEquals(1, executionCountById(freshSucceeded));
+        assertEquals(1, executionCountById(running));
+    }
+
+    @Test
     void shouldRecoverStaleClaimsAndMarkDeadByPolicies() throws SQLException {
         Instant now = Instant.parse("2026-01-01T00:00:00Z");
         UUID retryableExecution = UUID.randomUUID();
@@ -506,6 +526,36 @@ class PostgresExecutionRepositoryTest {
 
     private String status(UUID executionId) throws SQLException {
         return queryString("SELECT status FROM job_execution WHERE execution_id = ?", executionId);
+    }
+
+    private int executionCountById(UUID executionId) throws SQLException {
+        String sql = "SELECT COUNT(*) FROM job_execution WHERE execution_id = ?";
+        try (
+                Connection connection = dataSource.getConnection();
+                PreparedStatement statement = connection.prepareStatement(sql)
+        ) {
+            statement.setObject(1, executionId);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                resultSet.next();
+                return resultSet.getInt(1);
+            }
+        }
+    }
+
+    private void setFinishedAt(UUID executionId, Instant finishedAt) throws SQLException {
+        String sql = """
+                UPDATE job_execution
+                SET finished_at = ?
+                WHERE execution_id = ?
+                """;
+        try (
+                Connection connection = dataSource.getConnection();
+                PreparedStatement statement = connection.prepareStatement(sql)
+        ) {
+            statement.setTimestamp(1, toTimestamp(finishedAt));
+            statement.setObject(2, executionId);
+            statement.executeUpdate();
+        }
     }
 
     private long fencingToken(UUID executionId) throws SQLException {

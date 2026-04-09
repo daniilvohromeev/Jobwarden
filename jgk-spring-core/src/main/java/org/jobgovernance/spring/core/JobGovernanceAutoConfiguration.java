@@ -7,6 +7,7 @@ import org.jobgovernance.core.api.ScheduleEvaluator;
 import org.jobgovernance.core.model.JobExecution;
 import org.jobgovernance.core.schedule.DefaultScheduleEvaluator;
 import org.jobgovernance.executor.ActiveExecutionTracker;
+import org.jobgovernance.executor.CleanupLoop;
 import org.jobgovernance.executor.ExecutionEngine;
 import org.jobgovernance.executor.HandlerRunnerLoop;
 import org.jobgovernance.executor.HeartbeatLoop;
@@ -225,6 +226,18 @@ public class JobGovernanceAutoConfiguration {
                 properties.workerId() + "-recovery",
                 properties.recoveryInterval(),
                 properties.recoveryDeadReason()
+        );
+    }
+
+    @Bean
+    @ConditionalOnBean(ExecutionRepository.class)
+    @ConditionalOnMissingBean
+    public CleanupLoop jgkCleanupLoop(ExecutionRepository executionRepository, JgkProperties properties) {
+        return new CleanupLoop(
+                executionRepository,
+                properties.cleanupInterval(),
+                properties.cleanupRetention(),
+                properties.cleanupBatchSize()
         );
     }
 

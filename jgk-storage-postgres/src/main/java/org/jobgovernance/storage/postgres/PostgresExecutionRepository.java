@@ -687,6 +687,29 @@ public class PostgresExecutionRepository implements ExecutionRepository {
         });
     }
 
+    @Override
+    public int cleanupFinishedExecutions(Instant finishedBefore, int batchSize, Instant now) {
+        String sql = """
+                WITH doomed AS (
+                    SELECT execution_id
+                    FROM job_execution
+                    WHERE status IN ('SUCCEEDED', 'FAILED_FINAL', 'TIMED_OUT', 'CANCELLED', 'SKIPPED', 'DEAD')
+                      AND finished_at IS NOT NULL
+                      AND finished_at < ?
+                    ORDER BY finished_at, execution_id
+                    LIMIT ?
+                    FOR UPDATE SKIP LOCKED
+                )
+                DELETE FROM job_execution e
+                USING doomed
+                WHERE e.execution_id = doomed.execution_id
+                """;
+        return executeUpdate(sql, statement -> {
+            statement.setTimestamp(1, toTimestamp(finishedBefore));
+            statement.setInt(2, batchSize);
+        });
+    }
+
     private int executeUpdate(String sql, StatementBinder binder) {
         try (
                 Connection connection = dataSource.getConnection();

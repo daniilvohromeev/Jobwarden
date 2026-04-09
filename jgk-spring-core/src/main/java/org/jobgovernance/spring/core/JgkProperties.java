@@ -21,6 +21,9 @@ public record JgkProperties(
         Duration heartbeatInterval,
         Duration retryRequeueInterval,
         Duration recoveryInterval,
+        Duration cleanupInterval,
+        Duration cleanupRetention,
+        int cleanupBatchSize,
         String recoveryDeadReason,
         Duration shutdownGracePeriod
 ) {
@@ -38,6 +41,9 @@ public record JgkProperties(
         heartbeatInterval = heartbeatInterval == null ? Duration.ofSeconds(30) : heartbeatInterval;
         retryRequeueInterval = retryRequeueInterval == null ? Duration.ofSeconds(5) : retryRequeueInterval;
         recoveryInterval = recoveryInterval == null ? Duration.ofSeconds(30) : recoveryInterval;
+        cleanupInterval = cleanupInterval == null ? Duration.ofMinutes(10) : cleanupInterval;
+        cleanupRetention = cleanupRetention == null ? Duration.ofDays(30) : cleanupRetention;
+        cleanupBatchSize = cleanupBatchSize <= 0 ? 1_000 : cleanupBatchSize;
         recoveryDeadReason = recoveryDeadReason == null || recoveryDeadReason.isBlank()
                 ? "recovery deadline exceeded"
                 : recoveryDeadReason;
