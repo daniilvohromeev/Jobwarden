@@ -18,7 +18,9 @@ import org.jobgovernance.executor.RetryRequeueLoop;
 import org.jobgovernance.executor.SchedulerMaterializationLoop;
 import org.jobgovernance.storage.spi.ExecutionRepository;
 import org.jobgovernance.storage.spi.JobDefinitionRepository;
+import org.jobgovernance.storage.spi.ManualTriggerRequestRepository;
 import org.jobgovernance.storage.spi.ScheduleCursorRepository;
+import org.jobgovernance.storage.spi.AuditEventRepository;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -175,9 +177,19 @@ public class JobGovernanceAutoConfiguration {
     @ConditionalOnMissingBean
     public JobGovernanceManagementService jgkManagementService(
             JobRegistry jobRegistry,
-            ExecutionRepository executionRepository
+            ExecutionRepository executionRepository,
+            ObjectProvider<JobDefinitionRepository> jobDefinitionRepositoryProvider,
+            ObjectProvider<ManualTriggerRequestRepository> triggerRequestRepositoryProvider,
+            ObjectProvider<AuditEventRepository> auditEventRepositoryProvider
     ) {
-        return new DefaultJobGovernanceManagementService(jobRegistry, executionRepository);
+        return new DefaultJobGovernanceManagementService(
+                jobRegistry,
+                executionRepository,
+                jobDefinitionRepositoryProvider.getIfAvailable(),
+                triggerRequestRepositoryProvider.getIfAvailable(),
+                auditEventRepositoryProvider.getIfAvailable(),
+                java.time.Clock.systemUTC()
+        );
     }
 
     @Bean

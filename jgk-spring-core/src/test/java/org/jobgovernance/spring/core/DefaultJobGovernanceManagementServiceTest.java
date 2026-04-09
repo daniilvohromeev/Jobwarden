@@ -16,7 +16,10 @@ import org.jobgovernance.core.model.TriggerType;
 import org.jobgovernance.core.policy.IdempotencyStrategy;
 import org.jobgovernance.core.policy.RetryStrategies;
 import org.jobgovernance.core.policy.TimeoutPolicy;
+import org.jobgovernance.storage.spi.AuditEventRepository;
 import org.jobgovernance.storage.spi.ExecutionRepository;
+import org.jobgovernance.storage.spi.JobDefinitionRepository;
+import org.jobgovernance.storage.spi.ManualTriggerRequestRepository;
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
@@ -167,6 +170,65 @@ class DefaultJobGovernanceManagementServiceTest {
         assertEquals(2, executions.size());
         assertEquals(execA.executionId(), executions.getFirst().executionId());
         assertEquals("job-global", executions.getFirst().jobKey());
+    }
+
+    @Test
+    void shouldPersistPauseResumeAndEmitAuditWhenRepositoriesProvided() {
+        Instant now = Instant.parse("2026-01-01T00:00:00Z");
+        InMemoryJobRegistry registry = new InMemoryJobRegistry();
+        registry.register(registration("billing.reconcile", null));
+        FakeExecutionRepository executionRepository = new FakeExecutionRepository();
+        FakeJobDefinitionRepository definitionRepository = new FakeJobDefinitionRepository();
+        FakeAuditEventRepository auditRepository = new FakeAuditEventRepository();
+        DefaultJobGovernanceManagementService service = new DefaultJobGovernanceManagementService(
+                registry,
+                executionRepository,
+                definitionRepository,
+                null,
+                auditRepository,
+                Clock.fixed(now, ZoneOffset.UTC)
+        );
+
+        boolean paused = service.pauseJob("billing.reconcile", "operator");
+        boolean resumed = service.resumeJob("billing.reconcile", "operator");
+
+        assertTrue(paused);
+        assertTrue(resumed);
+        assertEquals(2, definitionRepository.updatedStates.size());
+        assertEquals(JobDefinitionState.PAUSED, definitionRepository.updatedStates.getFirst().targetState());
+        assertEquals(JobDefinitionState.ENABLED, definitionRepository.updatedStates.get(1).targetState());
+        assertEquals(List.of("JOB_PAUSED", "JOB_RESUMED"), auditRepository.events.stream().map(AuditEventRepository.AuditEvent::eventType).toList());
+    }
+
+    @Test
+    void shouldRecordManualTriggerRequestAndAudit() {
+        Instant now = Instant.parse("2026-01-01T00:00:00Z");
+        InMemoryJobRegistry registry = new InMemoryJobRegistry();
+        registry.register(registration("billing.reconcile", null));
+        FakeExecutionRepository executionRepository = new FakeExecutionRepository();
+        FakeManualTriggerRequestRepository triggerRepository = new FakeManualTriggerRequestRepository();
+        FakeAuditEventRepository auditRepository = new FakeAuditEventRepository();
+        DefaultJobGovernanceManagementService service = new DefaultJobGovernanceManagementService(
+                registry,
+                executionRepository,
+                null,
+                triggerRepository,
+                auditRepository,
+                Clock.fixed(now, ZoneOffset.UTC)
+        );
+
+        JobGovernanceManagementService.ExecutionView view = service.triggerNow(
+                "billing.reconcile",
+                null,
+                "operator",
+                "{\"manual\":true}",
+                "idem-request-1"
+        );
+
+        assertEquals(1, triggerRepository.enqueued.size());
+        assertEquals(1, triggerRepository.processed.size());
+        assertEquals(view.executionId(), triggerRepository.processed.getFirst().executionId());
+        assertEquals(List.of("MANUAL_TRIGGER_ENQUEUED"), auditRepository.events.stream().map(AuditEventRepository.AuditEvent::eventType).toList());
     }
 
     @SuppressWarnings("unchecked")
@@ -391,6 +453,118 @@ class DefaultJobGovernanceManagementServiceTest {
                 return null;
             }
             return jobKey + "|" + (tenantId == null ? "" : tenantId) + "|" + idempotencyKey;
+        }
+    }
+
+    private static final class FakeJobDefinitionRepository implements JobDefinitionRepository {
+        private final Map<String, JobDefinition> definitions = new HashMap<>();
+        private final List<StateUpdate> updatedStates = new ArrayList<>();
+
+        @Override
+        public void upsert(JobDefinition definition, Instant now) {
+            definitions.put(definition.jobKey(), definition);
+        }
+
+        @Override
+        public Optional<JobDefinition> findByJobKey(String jobKey) {
+            return Optional.ofNullable(definitions.get(jobKey));
+        }
+
+        @Override
+        public List<JobDefinition> findEnabled(int limit) {
+            return definitions.values().stream()
+                    .filter(definition -> definition.state() == JobDefinitionState.ENABLED)
+                    .limit(limit)
+                    .toList();
+        }
+
+        @Override
+        public boolean updateState(String jobKey, JobDefinitionState targetState, String actor, Instant changedAt) {
+            updatedStates.add(new StateUpdate(jobKey, targetState, actor, changedAt));
+            JobDefinition current = definitions.get(jobKey);
+            if (current == null) {
+                return false;
+            }
+            definitions.put(jobKey, new JobDefinition(
+                    current.jobKey(),
+                    current.version() + 1,
+                    current.displayName(),
+                    current.description(),
+                    current.ownerTeam(),
+                    current.tags(),
+                    current.executionMode(),
+                    current.schedule(),
+                    current.policy(),
+                    current.payloadSchemaVersion(),
+                    targetState,
+                    current.manualTriggerable(),
+                    current.internalOnly(),
+                    current.tenantScope()
+            ));
+            return true;
+        }
+
+        private record StateUpdate(String jobKey, JobDefinitionState targetState, String actor, Instant changedAt) {
+        }
+    }
+
+    private static final class FakeManualTriggerRequestRepository implements ManualTriggerRequestRepository {
+        private final List<ManualTriggerRequest> enqueued = new ArrayList<>();
+        private final List<ProcessedRequest> processed = new ArrayList<>();
+
+        @Override
+        public UUID enqueue(ManualTriggerRequest request) {
+            UUID requestId = request.requestId() == null ? UUID.randomUUID() : request.requestId();
+            enqueued.add(new ManualTriggerRequest(
+                    requestId,
+                    request.jobKey(),
+                    request.tenantId(),
+                    request.payloadRef(),
+                    request.idempotencyKey(),
+                    request.triggerAt(),
+                    request.actor(),
+                    request.requestedAt()
+            ));
+            return requestId;
+        }
+
+        @Override
+        public List<ManualTriggerRequest> fetchPending(int batchSize, Instant now) {
+            return List.of();
+        }
+
+        @Override
+        public boolean markProcessed(UUID requestId, Instant processedAt, UUID executionId) {
+            processed.add(new ProcessedRequest(requestId, processedAt, executionId));
+            return true;
+        }
+
+        private record ProcessedRequest(UUID requestId, Instant processedAt, UUID executionId) {
+        }
+    }
+
+    private static final class FakeAuditEventRepository implements AuditEventRepository {
+        private final List<AuditEvent> events = new ArrayList<>();
+
+        @Override
+        public void append(AuditEvent event) {
+            events.add(event);
+        }
+
+        @Override
+        public List<AuditEvent> findByJobKey(String jobKey, int limit) {
+            return events.stream()
+                    .filter(event -> jobKey.equals(event.jobKey()))
+                    .limit(limit)
+                    .toList();
+        }
+
+        @Override
+        public List<AuditEvent> findByExecutionId(UUID executionId, int limit) {
+            return events.stream()
+                    .filter(event -> executionId.equals(event.executionId()))
+                    .limit(limit)
+                    .toList();
         }
     }
 }

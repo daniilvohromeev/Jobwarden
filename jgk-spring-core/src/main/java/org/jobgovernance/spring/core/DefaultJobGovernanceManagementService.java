@@ -5,11 +5,15 @@ import org.jobgovernance.core.model.JobDefinition;
 import org.jobgovernance.core.model.JobDefinitionState;
 import org.jobgovernance.core.model.JobExecution;
 import org.jobgovernance.core.model.TriggerType;
+import org.jobgovernance.storage.spi.AuditEventRepository;
 import org.jobgovernance.storage.spi.ExecutionRepository;
+import org.jobgovernance.storage.spi.JobDefinitionRepository;
+import org.jobgovernance.storage.spi.ManualTriggerRequestRepository;
 
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -22,13 +26,16 @@ public final class DefaultJobGovernanceManagementService implements JobGovernanc
 
     private final JobRegistry jobRegistry;
     private final ExecutionRepository executionRepository;
+    private final JobDefinitionRepository jobDefinitionRepository;
+    private final ManualTriggerRequestRepository triggerRequestRepository;
+    private final AuditEventRepository auditEventRepository;
     private final Clock clock;
 
     public DefaultJobGovernanceManagementService(
             JobRegistry jobRegistry,
             ExecutionRepository executionRepository
     ) {
-        this(jobRegistry, executionRepository, Clock.systemUTC());
+        this(jobRegistry, executionRepository, null, null, null, Clock.systemUTC());
     }
 
     DefaultJobGovernanceManagementService(
@@ -36,8 +43,22 @@ public final class DefaultJobGovernanceManagementService implements JobGovernanc
             ExecutionRepository executionRepository,
             Clock clock
     ) {
+        this(jobRegistry, executionRepository, null, null, null, clock);
+    }
+
+    DefaultJobGovernanceManagementService(
+            JobRegistry jobRegistry,
+            ExecutionRepository executionRepository,
+            JobDefinitionRepository jobDefinitionRepository,
+            ManualTriggerRequestRepository triggerRequestRepository,
+            AuditEventRepository auditEventRepository,
+            Clock clock
+    ) {
         this.jobRegistry = Objects.requireNonNull(jobRegistry, "jobRegistry is required");
         this.executionRepository = Objects.requireNonNull(executionRepository, "executionRepository is required");
+        this.jobDefinitionRepository = jobDefinitionRepository;
+        this.triggerRequestRepository = triggerRequestRepository;
+        this.auditEventRepository = auditEventRepository;
         this.clock = Objects.requireNonNull(clock, "clock is required");
     }
 
@@ -74,22 +95,32 @@ public final class DefaultJobGovernanceManagementService implements JobGovernanc
 
     @Override
     public boolean pauseJob(String jobKey, String actor) {
-        return updateDefinitionState(jobKey, JobDefinitionState.PAUSED);
+        return updateDefinitionState(jobKey, JobDefinitionState.PAUSED, actor);
     }
 
     @Override
     public boolean resumeJob(String jobKey, String actor) {
-        return updateDefinitionState(jobKey, JobDefinitionState.ENABLED);
+        return updateDefinitionState(jobKey, JobDefinitionState.ENABLED, actor);
     }
 
     @Override
     public boolean cancelExecution(UUID executionId, String actor, String reason) {
-        return executionRepository.requestCancellation(
+        boolean cancelled = executionRepository.requestCancellation(
                 requireExecutionId(executionId),
                 sanitizeActor(actor),
                 sanitizeReason(reason),
                 clock.instant()
         );
+        if (cancelled) {
+            appendAudit(
+                    "EXECUTION_CANCEL_REQUESTED",
+                    null,
+                    executionId,
+                    actor,
+                    Map.of("reason", sanitizeReason(reason))
+            );
+        }
+        return cancelled;
     }
 
     @Override
@@ -127,6 +158,16 @@ public final class DefaultJobGovernanceManagementService implements JobGovernanc
                     normalizedIdempotencyKey
             );
             if (existing.isPresent()) {
+                appendAudit(
+                        "MANUAL_TRIGGER_DEDUPLICATED",
+                        normalizedJobKey,
+                        existing.get().executionId(),
+                        normalizedActor,
+                        Map.of(
+                                "tenantId", normalizedTenant == null ? "" : normalizedTenant,
+                                "idempotencyKey", normalizedIdempotencyKey
+                        )
+                );
                 return toExecutionView(existing.get());
             }
         }
@@ -135,7 +176,22 @@ public final class DefaultJobGovernanceManagementService implements JobGovernanc
                 .maxAttemptsHint()
                 .orElse(DEFAULT_MAX_ATTEMPTS);
         Instant createdAt = clock.instant();
+        String payloadRef = payloadRef(payloadJson);
         String dedupeKey = dedupeKey(normalizedJobKey, normalizedTenant, scheduledAt, normalizedIdempotencyKey);
+        UUID requestId = null;
+        if (triggerRequestRepository != null) {
+            requestId = triggerRequestRepository.enqueue(new ManualTriggerRequestRepository.ManualTriggerRequest(
+                    UUID.randomUUID(),
+                    normalizedJobKey,
+                    normalizedTenant,
+                    payloadRef,
+                    normalizedIdempotencyKey,
+                    scheduledAt,
+                    normalizedActor,
+                    createdAt
+            ));
+        }
+
         ExecutionRepository.ScheduledExecutionInsert insert = new ExecutionRepository.ScheduledExecutionInsert(
                 normalizedJobKey,
                 normalizedTenant,
@@ -143,7 +199,7 @@ public final class DefaultJobGovernanceManagementService implements JobGovernanc
                 scheduledAt,
                 scheduledAt,
                 maxAttempts,
-                payloadRef(payloadJson),
+                payloadRef,
                 dedupeKey,
                 normalizedActor + "|" + createdAt,
                 null,
@@ -154,25 +210,73 @@ public final class DefaultJobGovernanceManagementService implements JobGovernanc
         );
         executionRepository.enqueueScheduledExecution(insert, createdAt);
 
-        if (normalizedIdempotencyKey != null) {
-            return executionRepository.findByIdempotencyKey(normalizedJobKey, normalizedTenant, normalizedIdempotencyKey)
+        ExecutionView view = resolveExecutionView(normalizedJobKey, normalizedTenant, scheduledAt, normalizedIdempotencyKey);
+        if (requestId != null) {
+            triggerRequestRepository.markProcessed(requestId, createdAt, view.executionId());
+        }
+        appendAudit(
+                "MANUAL_TRIGGER_ENQUEUED",
+                normalizedJobKey,
+                view.executionId(),
+                normalizedActor,
+                Map.of(
+                        "tenantId", normalizedTenant == null ? "" : normalizedTenant,
+                        "scheduledAt", scheduledAt.toString(),
+                        "idempotencyKey", normalizedIdempotencyKey == null ? "" : normalizedIdempotencyKey
+                )
+        );
+        return view;
+    }
+
+    private ExecutionView resolveExecutionView(
+            String jobKey,
+            String tenantId,
+            Instant scheduledAt,
+            String idempotencyKey
+    ) {
+        if (idempotencyKey != null) {
+            return executionRepository.findByIdempotencyKey(jobKey, tenantId, idempotencyKey)
                     .map(this::toExecutionView)
                     .orElseThrow(() -> new IllegalStateException("Unable to load execution after trigger enqueue"));
         }
-
-        return executionRepository.findExecutions(normalizedJobKey, normalizedTenant, 5).stream()
+        return executionRepository.findExecutions(jobKey, tenantId, 5).stream()
                 .filter(execution -> execution.scheduledAt().equals(scheduledAt))
                 .findFirst()
                 .map(this::toExecutionView)
                 .orElseThrow(() -> new IllegalStateException("Unable to resolve execution after trigger enqueue"));
     }
 
-    private boolean updateDefinitionState(String jobKey, JobDefinitionState targetState) {
+    private boolean updateDefinitionState(String jobKey, JobDefinitionState targetState, String actor) {
         String normalizedJobKey = requireJobKey(jobKey);
         JobRegistry.JobRegistration<?, ?> registration = jobRegistry.findByJobKey(normalizedJobKey).orElse(null);
-        if (registration == null) {
-            return false;
+        Instant now = clock.instant();
+        String normalizedActor = sanitizeActor(actor);
+
+        boolean storageUpdated = false;
+        if (jobDefinitionRepository != null && registration != null) {
+            jobDefinitionRepository.upsert(registration.definition(), now);
         }
+        if (jobDefinitionRepository != null) {
+            storageUpdated = jobDefinitionRepository.updateState(normalizedJobKey, targetState, normalizedActor, now);
+        }
+
+        if (registration == null) {
+            return storageUpdated;
+        }
+        boolean registryUpdated = updateRegistryState(registration, targetState);
+        if (registryUpdated) {
+            appendAudit(
+                    targetState == JobDefinitionState.ENABLED ? "JOB_RESUMED" : "JOB_PAUSED",
+                    normalizedJobKey,
+                    null,
+                    normalizedActor,
+                    Map.of("state", targetState.name())
+            );
+        }
+        return storageUpdated || registryUpdated;
+    }
+
+    private boolean updateRegistryState(JobRegistry.JobRegistration<?, ?> registration, JobDefinitionState targetState) {
         JobDefinition current = registration.definition();
         if (current.state() == targetState) {
             return true;
@@ -280,5 +384,58 @@ public final class DefaultJobGovernanceManagementService implements JobGovernanc
 
     private static String emptyToNull(String value) {
         return value == null || value.isBlank() ? null : value;
+    }
+
+    private void appendAudit(
+            String eventType,
+            String jobKey,
+            UUID executionId,
+            String actor,
+            Map<String, String> details
+    ) {
+        if (auditEventRepository == null) {
+            return;
+        }
+        Map<String, String> normalized = new LinkedHashMap<>();
+        if (details != null) {
+            normalized.putAll(details);
+        }
+        auditEventRepository.append(new AuditEventRepository.AuditEvent(
+                UUID.randomUUID(),
+                eventType,
+                jobKey,
+                executionId,
+                sanitizeActor(actor),
+                toJson(normalized),
+                clock.instant()
+        ));
+    }
+
+    private static String toJson(Map<String, String> details) {
+        if (details == null || details.isEmpty()) {
+            return "{}";
+        }
+        StringBuilder builder = new StringBuilder("{");
+        boolean first = true;
+        for (Map.Entry<String, String> entry : details.entrySet()) {
+            if (!first) {
+                builder.append(',');
+            }
+            builder.append('"').append(escapeJson(entry.getKey())).append('"')
+                    .append(':')
+                    .append('"').append(escapeJson(entry.getValue())).append('"');
+            first = false;
+        }
+        builder.append('}');
+        return builder.toString();
+    }
+
+    private static String escapeJson(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value
+                .replace("\\", "\\\\")
+                .replace("\"", "\\\"");
     }
 }
