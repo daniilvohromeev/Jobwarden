@@ -132,4 +132,52 @@ class JobGovernanceAdminControllerTest {
 
         verify(runtimeStatusService).health();
     }
+
+    @Test
+    void getJobShouldReturnSingleJobView() throws Exception {
+        when(managementService.getJob("billing.reconcile", "tenant-a")).thenReturn(java.util.Optional.of(
+                new JobGovernanceManagementService.JobView(
+                        "billing.reconcile",
+                        "Billing Reconcile",
+                        "ENABLED",
+                        "billing-team",
+                        List.of("billing")
+                )
+        ));
+
+        mockMvc.perform(get("/jgk/v1/jobs/{jobKey}", "billing.reconcile")
+                        .param("tenantId", "tenant-a"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.jobKey").value("billing.reconcile"))
+                .andExpect(jsonPath("$.state").value("ENABLED"));
+
+        verify(managementService).getJob("billing.reconcile", "tenant-a");
+    }
+
+    @Test
+    void listDeadExecutionsShouldReturnPayload() throws Exception {
+        UUID executionId = UUID.randomUUID();
+        when(managementService.listDeadExecutions("tenant-a", 5)).thenReturn(List.of(
+                new JobGovernanceManagementService.ExecutionView(
+                        executionId,
+                        "billing.reconcile",
+                        "DEAD",
+                        Instant.parse("2026-01-01T00:00:00Z"),
+                        null,
+                        Instant.parse("2026-01-01T00:02:00Z"),
+                        3,
+                        "worker-a",
+                        Map.of("self", "/jgk/v1/executions/" + executionId)
+                )
+        ));
+
+        mockMvc.perform(get("/jgk/v1/executions/dead")
+                        .param("tenantId", "tenant-a")
+                        .param("limit", "5"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].executionId").value(executionId.toString()))
+                .andExpect(jsonPath("$[0].status").value("DEAD"));
+
+        verify(managementService).listDeadExecutions("tenant-a", 5);
+    }
 }

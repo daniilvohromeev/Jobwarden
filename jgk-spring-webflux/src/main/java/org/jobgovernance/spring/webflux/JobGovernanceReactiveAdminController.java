@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -42,6 +43,15 @@ public class JobGovernanceReactiveAdminController {
             @RequestParam(name = "limit", defaultValue = "100") int limit
     ) {
         return Flux.fromIterable(managementService.listJobs(tenantId, limit));
+    }
+
+    @GetMapping("/jobs/{jobKey}")
+    public Mono<JobGovernanceManagementService.JobView> getJob(
+            @PathVariable("jobKey") String jobKey,
+            @RequestParam(name = "tenantId", required = false) String tenantId
+    ) {
+        return Mono.fromSupplier(() -> managementService.getJob(jobKey, tenantId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "jobKey not found: " + jobKey)));
     }
 
     @GetMapping("/health")
@@ -84,6 +94,22 @@ public class JobGovernanceReactiveAdminController {
             @RequestBody CancelRequest request
     ) {
         return Mono.fromRunnable(() -> managementService.cancelExecution(executionId, request.actor(), request.reason()));
+    }
+
+    @GetMapping("/executions/retries")
+    public Flux<JobGovernanceManagementService.ExecutionView> listRetryExecutions(
+            @RequestParam(name = "tenantId", required = false) String tenantId,
+            @RequestParam(name = "limit", defaultValue = "100") int limit
+    ) {
+        return Flux.fromIterable(managementService.listRetryExecutions(tenantId, limit));
+    }
+
+    @GetMapping("/executions/dead")
+    public Flux<JobGovernanceManagementService.ExecutionView> listDeadExecutions(
+            @RequestParam(name = "tenantId", required = false) String tenantId,
+            @RequestParam(name = "limit", defaultValue = "100") int limit
+    ) {
+        return Flux.fromIterable(managementService.listDeadExecutions(tenantId, limit));
     }
 
     public record TriggerRequest(String tenantId, String actor, String payloadJson, String idempotencyKey) {

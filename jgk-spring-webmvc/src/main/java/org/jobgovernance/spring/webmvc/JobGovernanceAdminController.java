@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
 import java.util.List;
@@ -43,6 +44,15 @@ public class JobGovernanceAdminController {
         return managementService.listJobs(tenantId, limit);
     }
 
+    @GetMapping("/jobs/{jobKey}")
+    public JobGovernanceManagementService.JobView getJob(
+            @PathVariable("jobKey") String jobKey,
+            @RequestParam(name = "tenantId", required = false) String tenantId
+    ) {
+        return managementService.getJob(jobKey, tenantId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "jobKey not found: " + jobKey));
+    }
+
     @GetMapping("/health")
     public JobGovernanceRuntimeStatusService.RuntimeStatus health() {
         return runtimeStatusService == null
@@ -64,6 +74,22 @@ public class JobGovernanceAdminController {
             @RequestParam(name = "limit", defaultValue = "100") int limit
     ) {
         return managementService.listExecutions(jobKey, tenantId, limit);
+    }
+
+    @GetMapping("/executions/retries")
+    public List<JobGovernanceManagementService.ExecutionView> listRetryExecutions(
+            @RequestParam(name = "tenantId", required = false) String tenantId,
+            @RequestParam(name = "limit", defaultValue = "100") int limit
+    ) {
+        return managementService.listRetryExecutions(tenantId, limit);
+    }
+
+    @GetMapping("/executions/dead")
+    public List<JobGovernanceManagementService.ExecutionView> listDeadExecutions(
+            @RequestParam(name = "tenantId", required = false) String tenantId,
+            @RequestParam(name = "limit", defaultValue = "100") int limit
+    ) {
+        return managementService.listDeadExecutions(tenantId, limit);
     }
 
     @PostMapping("/jobs/{jobKey}/trigger")

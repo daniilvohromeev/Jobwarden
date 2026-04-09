@@ -136,4 +136,60 @@ class JobGovernanceReactiveAdminControllerTest {
 
         verify(runtimeStatusService).readiness();
     }
+
+    @Test
+    void getJobShouldReturnSingleJobView() {
+        when(managementService.getJob("billing.reconcile", "tenant-a")).thenReturn(java.util.Optional.of(
+                new JobGovernanceManagementService.JobView(
+                        "billing.reconcile",
+                        "Billing Reconcile",
+                        "ENABLED",
+                        "billing-team",
+                        List.of("billing")
+                )
+        ));
+
+        webTestClient.get()
+                .uri(uriBuilder -> uriBuilder.path("/jgk/v1/jobs/{jobKey}")
+                        .queryParam("tenantId", "tenant-a")
+                        .build("billing.reconcile"))
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.jobKey").isEqualTo("billing.reconcile")
+                .jsonPath("$.state").isEqualTo("ENABLED");
+
+        verify(managementService).getJob("billing.reconcile", "tenant-a");
+    }
+
+    @Test
+    void listRetryExecutionsShouldReturnPayload() {
+        UUID executionId = UUID.randomUUID();
+        when(managementService.listRetryExecutions("tenant-a", 5)).thenReturn(List.of(
+                new JobGovernanceManagementService.ExecutionView(
+                        executionId,
+                        "billing.reconcile",
+                        "FAILED_RETRYABLE",
+                        Instant.parse("2026-01-01T00:00:00Z"),
+                        Instant.parse("2026-01-01T00:00:10Z"),
+                        Instant.parse("2026-01-01T00:00:20Z"),
+                        2,
+                        "worker-a",
+                        Map.of("self", "/jgk/v1/executions/" + executionId)
+                )
+        ));
+
+        webTestClient.get()
+                .uri(uriBuilder -> uriBuilder.path("/jgk/v1/executions/retries")
+                        .queryParam("tenantId", "tenant-a")
+                        .queryParam("limit", 5)
+                        .build())
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$[0].executionId").isEqualTo(executionId.toString())
+                .jsonPath("$[0].status").isEqualTo("FAILED_RETRYABLE");
+
+        verify(managementService).listRetryExecutions("tenant-a", 5);
+    }
 }

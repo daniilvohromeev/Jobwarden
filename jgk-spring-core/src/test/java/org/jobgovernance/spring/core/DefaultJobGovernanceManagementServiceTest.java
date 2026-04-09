@@ -173,6 +173,43 @@ class DefaultJobGovernanceManagementServiceTest {
     }
 
     @Test
+    void shouldSupportJobDetailsAndStatusFilteredQueries() {
+        Instant now = Instant.parse("2026-01-01T00:00:00Z");
+        InMemoryJobRegistry registry = new InMemoryJobRegistry();
+        registry.register(registration("job-a", "tenant-a"));
+        registry.register(registration("job-b", "tenant-a"));
+        FakeExecutionRepository repository = new FakeExecutionRepository();
+        JobExecution retryExecution = repository.insertForTest(
+                "job-a",
+                "tenant-a",
+                now.minusSeconds(30),
+                ExecutionStatus.FAILED_RETRYABLE
+        );
+        JobExecution deadExecution = repository.insertForTest(
+                "job-b",
+                "tenant-a",
+                now.minusSeconds(60),
+                ExecutionStatus.DEAD
+        );
+        DefaultJobGovernanceManagementService service = new DefaultJobGovernanceManagementService(
+                registry,
+                repository,
+                Clock.fixed(now, ZoneOffset.UTC)
+        );
+
+        Optional<JobGovernanceManagementService.JobView> jobView = service.getJob("job-a", "tenant-a");
+        List<JobGovernanceManagementService.ExecutionView> retries = service.listRetryExecutions("tenant-a", 10);
+        List<JobGovernanceManagementService.ExecutionView> dead = service.listDeadExecutions("tenant-a", 10);
+
+        assertTrue(jobView.isPresent());
+        assertEquals("job-a", jobView.get().jobKey());
+        assertEquals(1, retries.size());
+        assertEquals(retryExecution.executionId(), retries.getFirst().executionId());
+        assertEquals(1, dead.size());
+        assertEquals(deadExecution.executionId(), dead.getFirst().executionId());
+    }
+
+    @Test
     void shouldPersistPauseResumeAndEmitAuditWhenRepositoriesProvided() {
         Instant now = Instant.parse("2026-01-01T00:00:00Z");
         InMemoryJobRegistry registry = new InMemoryJobRegistry();
@@ -420,6 +457,10 @@ class DefaultJobGovernanceManagementServiceTest {
         }
 
         private JobExecution insertForTest(String jobKey, String tenantId, Instant scheduledAt) {
+            return insertForTest(jobKey, tenantId, scheduledAt, ExecutionStatus.SCHEDULED);
+        }
+
+        private JobExecution insertForTest(String jobKey, String tenantId, Instant scheduledAt, ExecutionStatus status) {
             UUID executionId = UUID.randomUUID();
             JobExecution execution = new JobExecution(
                     executionId,
@@ -429,7 +470,7 @@ class DefaultJobGovernanceManagementServiceTest {
                     null,
                     null,
                     null,
-                    ExecutionStatus.SCHEDULED,
+                    status,
                     null,
                     1,
                     null,
