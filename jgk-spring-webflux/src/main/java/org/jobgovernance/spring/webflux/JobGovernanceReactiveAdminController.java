@@ -27,8 +27,8 @@ public class JobGovernanceReactiveAdminController {
 
     @GetMapping("/jobs")
     public Flux<JobGovernanceManagementService.JobView> listJobs(
-            @RequestParam(required = false) String tenantId,
-            @RequestParam(defaultValue = "100") int limit
+            @RequestParam(name = "tenantId", required = false) String tenantId,
+            @RequestParam(name = "limit", defaultValue = "100") int limit
     ) {
         return Flux.fromIterable(managementService.listJobs(tenantId, limit));
     }
@@ -36,7 +36,7 @@ public class JobGovernanceReactiveAdminController {
     @PostMapping("/jobs/{jobKey}/trigger")
     @ResponseStatus(HttpStatus.ACCEPTED)
     public Mono<JobGovernanceManagementService.ExecutionView> triggerNow(
-            @PathVariable String jobKey,
+            @PathVariable("jobKey") String jobKey,
             @RequestBody JobGovernanceReactiveAdminController.TriggerRequest request
     ) {
         return Mono.fromSupplier(
@@ -52,7 +52,10 @@ public class JobGovernanceReactiveAdminController {
 
     @PostMapping("/executions/{executionId}/cancel")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public Mono<Void> cancelExecution(@PathVariable UUID executionId, @RequestBody CancelRequest request) {
+    public Mono<Void> cancelExecution(
+            @PathVariable("executionId") UUID executionId,
+            @RequestBody CancelRequest request
+    ) {
         return Mono.fromRunnable(() -> managementService.cancelExecution(executionId, request.actor(), request.reason()));
     }
 

@@ -27,17 +27,17 @@ public class JobGovernanceAdminController {
 
     @GetMapping("/jobs")
     public List<JobGovernanceManagementService.JobView> listJobs(
-            @RequestParam(required = false) String tenantId,
-            @RequestParam(defaultValue = "100") int limit
+            @RequestParam(name = "tenantId", required = false) String tenantId,
+            @RequestParam(name = "limit", defaultValue = "100") int limit
     ) {
         return managementService.listJobs(tenantId, limit);
     }
 
     @GetMapping("/jobs/{jobKey}/executions")
     public List<JobGovernanceManagementService.ExecutionView> listExecutions(
-            @PathVariable String jobKey,
-            @RequestParam(required = false) String tenantId,
-            @RequestParam(defaultValue = "100") int limit
+            @PathVariable("jobKey") String jobKey,
+            @RequestParam(name = "tenantId", required = false) String tenantId,
+            @RequestParam(name = "limit", defaultValue = "100") int limit
     ) {
         return managementService.listExecutions(jobKey, tenantId, limit);
     }
@@ -45,7 +45,7 @@ public class JobGovernanceAdminController {
     @PostMapping("/jobs/{jobKey}/trigger")
     @ResponseStatus(HttpStatus.ACCEPTED)
     public JobGovernanceManagementService.ExecutionView triggerNow(
-            @PathVariable String jobKey,
+            @PathVariable("jobKey") String jobKey,
             @RequestBody TriggerRequest request
     ) {
         return managementService.triggerNow(jobKey, request.tenantId(), request.actor(), request.payloadJson(), request.idempotencyKey());
@@ -54,7 +54,7 @@ public class JobGovernanceAdminController {
     @PostMapping("/jobs/{jobKey}/trigger-at")
     @ResponseStatus(HttpStatus.ACCEPTED)
     public JobGovernanceManagementService.ExecutionView triggerAt(
-            @PathVariable String jobKey,
+            @PathVariable("jobKey") String jobKey,
             @RequestBody TriggerAtRequest request
     ) {
         return managementService.triggerAt(
@@ -69,19 +69,28 @@ public class JobGovernanceAdminController {
 
     @PostMapping("/jobs/{jobKey}/pause")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void pauseJob(@PathVariable String jobKey, @RequestParam String actor) {
+    public void pauseJob(
+            @PathVariable("jobKey") String jobKey,
+            @RequestParam(name = "actor") String actor
+    ) {
         managementService.pauseJob(jobKey, actor);
     }
 
     @PostMapping("/jobs/{jobKey}/resume")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void resumeJob(@PathVariable String jobKey, @RequestParam String actor) {
+    public void resumeJob(
+            @PathVariable("jobKey") String jobKey,
+            @RequestParam(name = "actor") String actor
+    ) {
         managementService.resumeJob(jobKey, actor);
     }
 
     @PostMapping("/executions/{executionId}/cancel")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void cancelExecution(@PathVariable UUID executionId, @RequestBody CancelRequest request) {
+    public void cancelExecution(
+            @PathVariable("executionId") UUID executionId,
+            @RequestBody CancelRequest request
+    ) {
         managementService.cancelExecution(executionId, request.actor(), request.reason());
     }
 
