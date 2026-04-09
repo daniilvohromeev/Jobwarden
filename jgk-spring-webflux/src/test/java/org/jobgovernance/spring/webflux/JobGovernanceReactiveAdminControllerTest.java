@@ -192,4 +192,33 @@ class JobGovernanceReactiveAdminControllerTest {
 
         verify(managementService).listRetryExecutions("tenant-a", 5);
     }
+
+    @Test
+    void listExecutionAuditShouldReturnPayload() {
+        UUID eventId = UUID.randomUUID();
+        UUID executionId = UUID.randomUUID();
+        when(managementService.listAuditEventsByExecution(executionId, 5)).thenReturn(List.of(
+                new JobGovernanceManagementService.AuditView(
+                        eventId,
+                        "EXECUTION_CANCEL_REQUESTED",
+                        "billing.reconcile",
+                        executionId,
+                        "operator",
+                        "{\"reason\":\"manual\"}",
+                        Instant.parse("2026-01-01T00:00:00Z")
+                )
+        ));
+
+        webTestClient.get()
+                .uri(uriBuilder -> uriBuilder.path("/jgk/v1/executions/{executionId}/audit")
+                        .queryParam("limit", 5)
+                        .build(executionId))
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$[0].eventId").isEqualTo(eventId.toString())
+                .jsonPath("$[0].eventType").isEqualTo("EXECUTION_CANCEL_REQUESTED");
+
+        verify(managementService).listAuditEventsByExecution(executionId, 5);
+    }
 }

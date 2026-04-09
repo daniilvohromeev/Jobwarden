@@ -180,4 +180,29 @@ class JobGovernanceAdminControllerTest {
 
         verify(managementService).listDeadExecutions("tenant-a", 5);
     }
+
+    @Test
+    void listJobAuditEventsShouldReturnPayload() throws Exception {
+        UUID eventId = UUID.randomUUID();
+        UUID executionId = UUID.randomUUID();
+        when(managementService.listAuditEventsByJob("billing.reconcile", 5)).thenReturn(List.of(
+                new JobGovernanceManagementService.AuditView(
+                        eventId,
+                        "MANUAL_TRIGGER_ENQUEUED",
+                        "billing.reconcile",
+                        executionId,
+                        "operator",
+                        "{\"tenantId\":\"\"}",
+                        Instant.parse("2026-01-01T00:00:00Z")
+                )
+        ));
+
+        mockMvc.perform(get("/jgk/v1/jobs/{jobKey}/audit", "billing.reconcile")
+                        .param("limit", "5"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].eventId").value(eventId.toString()))
+                .andExpect(jsonPath("$[0].eventType").value("MANUAL_TRIGGER_ENQUEUED"));
+
+        verify(managementService).listAuditEventsByJob("billing.reconcile", 5);
+    }
 }

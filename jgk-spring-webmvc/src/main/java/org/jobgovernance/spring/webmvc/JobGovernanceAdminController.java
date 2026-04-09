@@ -92,6 +92,22 @@ public class JobGovernanceAdminController {
         return managementService.listDeadExecutions(tenantId, limit);
     }
 
+    @GetMapping("/jobs/{jobKey}/audit")
+    public List<JobGovernanceManagementService.AuditView> listJobAuditEvents(
+            @PathVariable("jobKey") String jobKey,
+            @RequestParam(name = "limit", defaultValue = "100") int limit
+    ) {
+        return managementService.listAuditEventsByJob(jobKey, limit);
+    }
+
+    @GetMapping("/executions/{executionId}/audit")
+    public List<JobGovernanceManagementService.AuditView> listExecutionAuditEvents(
+            @PathVariable("executionId") UUID executionId,
+            @RequestParam(name = "limit", defaultValue = "100") int limit
+    ) {
+        return managementService.listAuditEventsByExecution(executionId, limit);
+    }
+
     @PostMapping("/jobs/{jobKey}/trigger")
     @ResponseStatus(HttpStatus.ACCEPTED)
     public JobGovernanceManagementService.ExecutionView triggerNow(

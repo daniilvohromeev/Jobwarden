@@ -24,6 +24,10 @@ public interface JobGovernanceManagementService {
 
     List<ExecutionView> listExecutions(String jobKey, String tenantId, int limit);
 
+    List<AuditView> listAuditEventsByJob(String jobKey, int limit);
+
+    List<AuditView> listAuditEventsByExecution(UUID executionId, int limit);
+
     default Optional<JobView> getJob(String jobKey, String tenantId) {
         if (jobKey == null || jobKey.isBlank()) {
             return Optional.empty();
@@ -84,6 +88,17 @@ public interface JobGovernanceManagementService {
             int attempt,
             String workerId,
             Map<String, String> links
+    ) {
+    }
+
+    record AuditView(
+            UUID eventId,
+            String eventType,
+            String jobKey,
+            UUID executionId,
+            String actor,
+            String detailsJson,
+            Instant createdAt
     ) {
     }
 }

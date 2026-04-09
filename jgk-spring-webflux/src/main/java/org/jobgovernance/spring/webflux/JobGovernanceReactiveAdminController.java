@@ -112,6 +112,22 @@ public class JobGovernanceReactiveAdminController {
         return Flux.fromIterable(managementService.listDeadExecutions(tenantId, limit));
     }
 
+    @GetMapping("/jobs/{jobKey}/audit")
+    public Flux<JobGovernanceManagementService.AuditView> listJobAuditEvents(
+            @PathVariable("jobKey") String jobKey,
+            @RequestParam(name = "limit", defaultValue = "100") int limit
+    ) {
+        return Flux.fromIterable(managementService.listAuditEventsByJob(jobKey, limit));
+    }
+
+    @GetMapping("/executions/{executionId}/audit")
+    public Flux<JobGovernanceManagementService.AuditView> listExecutionAuditEvents(
+            @PathVariable("executionId") UUID executionId,
+            @RequestParam(name = "limit", defaultValue = "100") int limit
+    ) {
+        return Flux.fromIterable(managementService.listAuditEventsByExecution(executionId, limit));
+    }
+
     public record TriggerRequest(String tenantId, String actor, String payloadJson, String idempotencyKey) {
     }
 

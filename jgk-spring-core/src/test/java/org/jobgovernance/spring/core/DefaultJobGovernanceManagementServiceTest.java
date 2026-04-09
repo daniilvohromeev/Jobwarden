@@ -268,6 +268,51 @@ class DefaultJobGovernanceManagementServiceTest {
         assertEquals(List.of("MANUAL_TRIGGER_ENQUEUED"), auditRepository.events.stream().map(AuditEventRepository.AuditEvent::eventType).toList());
     }
 
+    @Test
+    void shouldListAuditEventsByJobAndExecution() {
+        Instant now = Instant.parse("2026-01-01T00:00:00Z");
+        InMemoryJobRegistry registry = new InMemoryJobRegistry();
+        registry.register(registration("billing.reconcile", null));
+        FakeExecutionRepository executionRepository = new FakeExecutionRepository();
+        FakeAuditEventRepository auditRepository = new FakeAuditEventRepository();
+        UUID executionId = UUID.randomUUID();
+        auditRepository.append(new AuditEventRepository.AuditEvent(
+                UUID.randomUUID(),
+                "MANUAL_TRIGGER_ENQUEUED",
+                "billing.reconcile",
+                executionId,
+                "operator",
+                "{\"tenantId\":\"\"}",
+                now
+        ));
+        auditRepository.append(new AuditEventRepository.AuditEvent(
+                UUID.randomUUID(),
+                "EXECUTION_CANCEL_REQUESTED",
+                "billing.reconcile",
+                executionId,
+                "operator",
+                "{\"reason\":\"manual\"}",
+                now.plusSeconds(10)
+        ));
+
+        DefaultJobGovernanceManagementService service = new DefaultJobGovernanceManagementService(
+                registry,
+                executionRepository,
+                null,
+                null,
+                auditRepository,
+                Clock.fixed(now, ZoneOffset.UTC)
+        );
+
+        List<JobGovernanceManagementService.AuditView> byJob = service.listAuditEventsByJob("billing.reconcile", 10);
+        List<JobGovernanceManagementService.AuditView> byExecution = service.listAuditEventsByExecution(executionId, 10);
+
+        assertEquals(2, byJob.size());
+        assertEquals(2, byExecution.size());
+        assertEquals("MANUAL_TRIGGER_ENQUEUED", byJob.getFirst().eventType());
+        assertEquals("EXECUTION_CANCEL_REQUESTED", byExecution.get(1).eventType());
+    }
+
     @SuppressWarnings("unchecked")
     private static JobRegistry.JobRegistration<Map<String, Object>, String> registration(String jobKey, String tenantScope) {
         JobDefinition definition = new JobDefinition(

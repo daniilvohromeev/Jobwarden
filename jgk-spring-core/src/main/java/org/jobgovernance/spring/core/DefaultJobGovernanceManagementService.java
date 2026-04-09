@@ -132,6 +132,30 @@ public final class DefaultJobGovernanceManagementService implements JobGovernanc
                 .toList();
     }
 
+    @Override
+    public List<AuditView> listAuditEventsByJob(String jobKey, int limit) {
+        if (auditEventRepository == null) {
+            return List.of();
+        }
+        String normalizedJobKey = requireJobKey(jobKey);
+        int cappedLimit = capLimit(limit);
+        return auditEventRepository.findByJobKey(normalizedJobKey, cappedLimit).stream()
+                .map(this::toAuditView)
+                .toList();
+    }
+
+    @Override
+    public List<AuditView> listAuditEventsByExecution(UUID executionId, int limit) {
+        if (auditEventRepository == null) {
+            return List.of();
+        }
+        UUID normalizedExecutionId = requireExecutionId(executionId);
+        int cappedLimit = capLimit(limit);
+        return auditEventRepository.findByExecutionId(normalizedExecutionId, cappedLimit).stream()
+                .map(this::toAuditView)
+                .toList();
+    }
+
     private ExecutionView trigger(
             String jobKey,
             String tenantId,
@@ -384,6 +408,18 @@ public final class DefaultJobGovernanceManagementService implements JobGovernanc
 
     private static String emptyToNull(String value) {
         return value == null || value.isBlank() ? null : value;
+    }
+
+    private AuditView toAuditView(AuditEventRepository.AuditEvent event) {
+        return new AuditView(
+                event.eventId(),
+                event.eventType(),
+                event.jobKey(),
+                event.executionId(),
+                event.actor(),
+                event.detailsJson(),
+                event.createdAt()
+        );
     }
 
     private void appendAudit(
